@@ -121,6 +121,7 @@ public class RecommenderAgent extends Agent
 	public static final int Doc2Vec = 4;     //added by Sepide
 	public static final int CommonNeighbors = 5;        // added by Sepide
 	public static final int K_MEANSEUCLIDEAN = 6;     // added by Sepide 
+	private static final String TWEET_BATCH_ONTOLOGY = "Tweet Batch From User Agent";
 	private static final double TEST_SET_PERCENT = 0.30;
 	private static final double TRAIN_SET_PERCENT = 0.70;
 	public static final int HIDDEN_NEURONS = 10;
@@ -481,134 +482,21 @@ public class RecommenderAgent extends Agent
 				}
 			}
 
-			if (msg!=null && msg.getOntology() == "Tweet From User Agent")
+			boolean receivedTweetData = false;
+			
+			if (msg!=null && "Tweet From User Agent".equals(msg.getOntology()))
 			{
-				tweetCount++;
-				if (tweetCount == 1)
-					firstTweetTime = System.nanoTime();
-				
-				ArrayList<String> currUserDocuments;
-				ArrayList<Long> currUserTweetIdList;
-				String tweetReceived;
-				String tweetUserReceived;
-				long tweetIdReceived;
-				String tweetTextReceived;
-				int totalTweetFromUser;
-				final byte[] utf16MessageBytes;
-				String tweetFolloweeName;
-				
-				tweetReceived = msg.getContent();
-				// tweetUserReceived = tweetReceived.split(" ",4)[1];
-				// tweetIdReceived = Long.valueOf(tweetReceived.split(" ",4)[2]);
-				// tweetTextReceived = tweetReceived.split(" ",4)[3];
-				// totalTweetFromUser = Integer.parseInt(tweetReceived.split(" ",4)[0]);
-				tweetUserReceived = tweetReceived.split(" ",5)[1];
-				tweetIdReceived = Long.valueOf(tweetReceived.split(" ",5)[2]);
-				tweetTextReceived = tweetReceived.split(" ",5)[4];
-				totalTweetFromUser = Integer.parseInt(tweetReceived.split(" ",5)[0]);
-				tweetFolloweeName = tweetReceived.split(" ",5)[3];
-				
-				// System.out.println("1tweetReceived:" +tweetReceived);
-				// System.out.println("2tweetReceived:" +totalTweetFromUser+","+tweetUserReceived+","+tweetIdReceived+","+tweetTextReceived+","+tweetFolloweeName);
-				
-				if (tweetUserReceived.equals("sageryereson"))
-					System.out.println("sageryerson: "+tweetReceived);
-				
-				if (!userFollowee.containsKey(tweetUserReceived))
-					userFollowee.put(tweetUserReceived,tweetFolloweeName);
-							
-				try{
-					utf16MessageBytes= tweetReceived.getBytes("UTF-16BE");
-				} catch (UnsupportedEncodingException e) {
-					throw new AssertionError("UTF-16BE not supported");
-					
-				}
-				totalMessageBytes += utf16MessageBytes.length;
-				// System.out.println("totalMessageBytes: "+totalMessageBytes);
-				
-				// if (tweetUserReceived.equals("TetraRyerson"))
-				// {
-					// System.out.println("From TetraRyerson: "+tweetTextReceived);
-				// }
-				
-				// try {
-					// FileWriter writer = new FileWriter("tweetsReceived"+String.valueOf(systemTimeName)+".txt", true); //append
+				receivedTweetData = recordTweetFromUserAgent(msg.getContent());
+			}
+			
+			if (msg!=null && TWEET_BATCH_ONTOLOGY.equals(msg.getOntology()))
+			{
+				receivedTweetData = recordTweetBatchFromUserAgent(msg);
+			}
 
-					// BufferedWriter bufferedWriter = new BufferedWriter(writer);
-		
-					// bufferedWriter.write(tweetUserReceived + "\t" + tweetIdReceived + "\t" + tweetTextReceived);
-					// bufferedWriter.newLine();
-
-					// bufferedWriter.close();
-				// } catch (IOException e) {
-					// e.printStackTrace();
-				// }
-				
-				if (usersRec.contains(tweetUserReceived))
-				{
-					int userIndex = usersRec.indexOf(tweetUserReceived);
-					usersRecTweetCountsReceived[userIndex]++;
-					
-					if (usersRecTweetCountsReceived[userIndex] == totalTweetFromUser)
-					{
-						ACLMessage msgLastTweetFromRecUser = new ACLMessage( ACLMessage.INFORM );
-						msgLastTweetFromRecUser.addReceiver( new AID(tweetUserReceived+"-UserAgent", AID.ISLOCALNAME) );
-						msgLastTweetFromRecUser.setPerformative( ACLMessage.INFORM );
-						msgLastTweetFromRecUser.setContent("Received Last Tweet");
-						msgLastTweetFromRecUser.setOntology("Last Tweet Received From Rec Agent");
-						send(msgLastTweetFromRecUser);
-					}
-					
-				}
-				
-				/*if (!allUserDocuments.containsKey(tweetUserReceived))
-				{
-					currUserDocuments = new ArrayList<String>();
-					userRegisteredInRecAgent.add(tweetUserReceived);
-				}
-				else
-					currUserDocuments = allUserDocuments.get(tweetUserReceived);
-
-				currUserDocuments.add(tweetTextReceived);
-				allUserDocuments.put(tweetUserReceived, currUserDocuments);
-				 */
-				
-				if (!userRegisteredInRecAgent.contains(tweetUserReceived))
-				{
-					userRegisteredInRecAgent.add(tweetUserReceived);
-				}
-				
-				tweetIdText.put(tweetIdReceived, tweetTextReceived);
-				tweetIdUser.put(tweetIdReceived, tweetUserReceived);
-
-				//				if (!usersTweetIdsList.containsKey(tweetUserReceived))
-				//					currUserTweetIdList = new ArrayList<Long>();
-				//				else	
-				//					currUserTweetIdList = usersTweetIdsList.get(tweetUserReceived);
-				//
-				//				currUserTweetIdList.add(tweetIdReceived);
-				//				usersTweetIdsList.put(tweetUserReceived, currUserTweetIdList);
-
-				//@Jason see tweets before processing
-				/*try {
-					FileWriter writer = new FileWriter("tweetsRec.txt", true); //append
-
-					BufferedWriter bufferedWriter = new BufferedWriter(writer);
-
-					bufferedWriter.write(myAgent.getLocalName()+" "+msg.getContent()+" tweetCount: "+tweetCount);
-					bufferedWriter.newLine();
-
-					bufferedWriter.close();
-				} catch (IOException e) {
-					e.printStackTrace();
-				}*/
-
-//				System.out.println(myAgent.getLocalName()+" "+msg.getContent()+" tweetCount: "+tweetCount+"/"+tweetsToReceive);
-//				System.out.println(myAgent.getLocalName()+" tweetCount: "+tweetCount+"/"+tweetsToReceive);
-
-				if(tweetCount == tweetsToReceive)
-				{
-					long lastTweetTime = System.nanoTime();
+			if(receivedTweetData && tweetCount >= tweetsToReceive)
+			{
+				long lastTweetTime = System.nanoTime();
 					/*System.out.println("tweetIdText: "+tweetIdText);
 					System.out.println("tweetIdUser: "+tweetIdText);
 					System.out.println("usersTweetIdsList: "+usersTweetIdsList);
@@ -1334,7 +1222,6 @@ public class RecommenderAgent extends Agent
 
 					System.out.println(getLocalName()+ " Text Processing Complete");
 
-				}
 			}
 
 			//@Jason added new message to start recommending
@@ -1378,18 +1265,18 @@ public class RecommenderAgent extends Agent
 					allTermsDocumentFreq.put(term, 0);
 				}
 				
-				for (String curName : allUserDocuments.keySet())
-				{
-					LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
-					System.out.println("============================================");
-					//System.out.println(" Sepide testing if the document includes the users with their aggregated tweets" + allUserDocuments.get(curName));  // added by Sepide
+					for (String curName : allUserDocuments.keySet())
+					{
+						LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
+						System.out.println("============================================");
+						//System.out.println(" Sepide testing if the document includes the users with their aggregated tweets" + allUserDocuments.get(curName));  // added by Sepide
 					for (String docTerm : curDoc.keySet())
 					{
 						docFreq = allTermsDocumentFreq.get(docTerm);
-						docFreq++;
-						allTermsDocumentFreq.put(docTerm,docFreq);
+							docFreq++;
+							allTermsDocumentFreq.put(docTerm,docFreq);
+						}
 					}
-				}
 				
 								// FileWriter writer11;
 				// try {
@@ -1834,14 +1721,7 @@ public class RecommenderAgent extends Agent
 								uniqueWordCountTrain++;
 							}
 							
-							String attributeClass = "@attribute result ";
-							StringJoiner classJoiner = new StringJoiner(",","{","}");
-							for (String className: followeeFollowers.keySet())
-							{
-								classJoiner.add(className);
-							}
-							
-							attributeClass += classJoiner.toString();
+							String attributeClass = formatArffClassAttribute(followeeFollowers.keySet());
 							
 							bufferedWriterTrain.write(attributeClass);
 							bufferedWriterData.write(attributeClass);
@@ -1891,8 +1771,8 @@ public class RecommenderAgent extends Agent
 								// }
 								tfidfJoiner = vectorArffFormat(currDocTfidf,allUniqueDocTerms);
 								
-								bufferedWriterTrain.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
-								bufferedWriterData.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
+								bufferedWriterTrain.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
+								bufferedWriterData.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
 								//S bufferedWriterData.write(tfidfJoiner.toString());
 								bufferedWriterTrain.newLine();
 								bufferedWriterData.newLine();
@@ -1920,7 +1800,7 @@ public class RecommenderAgent extends Agent
 								tfidfJoiner = vectorArffFormat(currDocTfidf,allUniqueDocTerms);
 								
 								
-								bufferedWriterData.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
+								bufferedWriterData.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
 								//S bufferedWriterData.write(tfidfJoiner.toString());
 								
 								bufferedWriterData.newLine();
@@ -2072,14 +1952,7 @@ public class RecommenderAgent extends Agent
 							uniqueWordCountTest++;
 						}
 						
-						String attributeClass = "@attribute result ";
-						StringJoiner classJoiner = new StringJoiner(",","{","}");
-						for (String className: followeeFollowers.keySet())
-						{
-							classJoiner.add(className);
-						}
-						
-						attributeClass += classJoiner.toString();
+						String attributeClass = formatArffClassAttribute(followeeFollowers.keySet());
 						
 						
 						bufferedWriterTest.write(attributeClass);
@@ -2129,7 +2002,7 @@ public class RecommenderAgent extends Agent
 							
 							tfidfJoiner = vectorArffFormat(currDocTfidf,allUniqueDocTerms);
 								
-							bufferedWriterTest.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
+							bufferedWriterTest.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
 							bufferedWriterTest.newLine();	
 						}
 						bufferedWriterTest.close();
@@ -2139,7 +2012,7 @@ public class RecommenderAgent extends Agent
 							Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);							
 							tfidfJoiner = vectorArffFormat(currDocTfidf,allUniqueDocTerms);
 							
-							bufferedWriterRecommend.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
+							bufferedWriterRecommend.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
 							bufferedWriterRecommend.newLine();
 						}
 						bufferedWriterRecommend.close();	
@@ -4658,7 +4531,12 @@ public class RecommenderAgent extends Agent
 					
 					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe","D:/Simulator-S-15-May-2020/TwitterGatherDataFollowers/userRyersonU/doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+myCSV).inheritIO();
 					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe",doc2vecDirLoc + "doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+out_file_pattern,""+nodeNumber).inheritIO();
-					java.lang.ProcessBuilder pb = new ProcessBuilder("python",doc2vecDirLoc + "doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+out_file_pattern,""+nodeNumber);
+					String pythonExecutable = System.getenv("DSMP_PYTHON");
+					if (pythonExecutable == null || pythonExecutable.trim().isEmpty())
+					{
+						pythonExecutable = System.getProperty("os.name").toLowerCase().contains("win") ? "python" : "python3";
+					}
+					java.lang.ProcessBuilder pb = new ProcessBuilder(pythonExecutable,doc2vecDirLoc + "doc2vec.py",""+usersRec.get(0).toString(),""+topn,""+out_file_pattern,""+nodeNumber);
 					//java.lang.ProcessBuilder pb = new ProcessBuilder("C:/Program Files/Python39/python.exe","D:/Simulator-S-15-May-2020/TwitterGatherDataFollowers/userRyersonU/doc2vec3.py",""+usersRec.get(0).toString(),""+topn,""+myGui.fileChooser.getSelectedFile()).inheritIO();
                     
 					Process p = pb.start();
@@ -6212,6 +6090,143 @@ public class RecommenderAgent extends Agent
 				tfidfJoinerTemp.add(String.valueOf(currTfidf));
 			}
 			return tfidfJoinerTemp;
+		}
+		
+		private boolean recordTweetBatchFromUserAgent(ACLMessage msg)
+		{
+			Object batchObject;
+			try
+			{
+				batchObject = msg.getContentObject();
+			}
+			catch (UnreadableException e)
+			{
+				e.printStackTrace();
+				return false;
+			}
+			
+			if (!(batchObject instanceof List<?>))
+			{
+				System.out.println(getLocalName()+" received invalid tweet batch payload from "+msg.getSender().getLocalName());
+				return false;
+			}
+			
+			boolean recordedAnyTweet = false;
+			for (Object tweetObject : (List<?>) batchObject)
+			{
+				if (tweetObject instanceof String)
+				{
+					recordedAnyTweet = recordTweetFromUserAgent((String) tweetObject) || recordedAnyTweet;
+				}
+			}
+			
+			return recordedAnyTweet;
+		}
+		
+		private boolean recordTweetFromUserAgent(String tweetReceived)
+		{
+			if (tweetReceived == null)
+			{
+				return false;
+			}
+			
+			String[] tweetFields = tweetReceived.split("\t", 5);
+			if (tweetFields.length < 5)
+			{
+				tweetFields = tweetReceived.split(" ", 5);
+			}
+			if (tweetFields.length < 5)
+			{
+				System.out.println(getLocalName()+" skipped malformed tweet message: "+tweetReceived);
+				return false;
+			}
+			
+			int totalTweetFromUser;
+			long tweetIdReceived;
+			try
+			{
+				totalTweetFromUser = Integer.parseInt(tweetFields[0]);
+				tweetIdReceived = Long.valueOf(tweetFields[2]);
+			}
+			catch (NumberFormatException e)
+			{
+				System.out.println(getLocalName()+" skipped tweet message with invalid numeric fields: "+tweetReceived);
+				return false;
+			}
+			
+			String tweetUserReceived = tweetFields[1];
+			String tweetFolloweeName = tweetFields[3];
+			String tweetTextReceived = tweetFields[4];
+			
+			tweetCount++;
+			if (tweetCount == 1)
+				firstTweetTime = System.nanoTime();
+			
+			if (tweetUserReceived.equals("sageryereson"))
+				System.out.println("sageryerson: "+tweetReceived);
+			
+			if (!userFollowee.containsKey(tweetUserReceived))
+				userFollowee.put(tweetUserReceived,tweetFolloweeName);
+			
+			try
+			{
+				totalMessageBytes += tweetReceived.getBytes("UTF-16BE").length;
+			}
+			catch (UnsupportedEncodingException e)
+			{
+				throw new AssertionError("UTF-16BE not supported");
+			}
+			
+			if (usersRec.contains(tweetUserReceived))
+			{
+				int userIndex = usersRec.indexOf(tweetUserReceived);
+				usersRecTweetCountsReceived[userIndex]++;
+				
+				if (usersRecTweetCountsReceived[userIndex] == totalTweetFromUser)
+				{
+					ACLMessage msgLastTweetFromRecUser = new ACLMessage( ACLMessage.INFORM );
+					msgLastTweetFromRecUser.addReceiver( new AID(tweetUserReceived+"-UserAgent", AID.ISLOCALNAME) );
+					msgLastTweetFromRecUser.setPerformative( ACLMessage.INFORM );
+					msgLastTweetFromRecUser.setContent("Received Last Tweet");
+					msgLastTweetFromRecUser.setOntology("Last Tweet Received From Rec Agent");
+					send(msgLastTweetFromRecUser);
+				}
+			}
+			
+			if (!userRegisteredInRecAgent.contains(tweetUserReceived))
+			{
+				userRegisteredInRecAgent.add(tweetUserReceived);
+			}
+			
+			tweetIdText.put(tweetIdReceived, tweetTextReceived);
+			tweetIdUser.put(tweetIdReceived, tweetUserReceived);
+			return true;
+		}
+		
+		private String formatArffClassAttribute(Iterable<String> classNames)
+		{
+			StringJoiner classJoiner = new StringJoiner(",","{","}");
+			for (String className: classNames)
+			{
+				classJoiner.add(formatArffClassValue(className));
+			}
+			return "@attribute result " + classJoiner.toString();
+		}
+		
+		private String formatArffClassValue(String className)
+		{
+			if (className == null)
+			{
+				return "?";
+			}
+			
+			String escapedClassName = className
+					.replace("\\", "\\\\")
+					.replace("'", "\\'")
+					.replace('\r', ' ')
+					.replace('\n', ' ');
+			
+			return "'" + escapedClassName + "'";
 		}
 		
 		private void testNeuralNetwork(NeuralNetwork nnet, DataSet testSet) {
