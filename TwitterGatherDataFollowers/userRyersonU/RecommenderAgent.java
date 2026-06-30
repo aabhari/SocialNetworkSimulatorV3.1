@@ -27,6 +27,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -324,6 +325,9 @@ public class RecommenderAgent extends Agent
 	private MultilayerPerceptron mlp; //added by Sepide
 	private MultiLayerPerceptron averagedMLP; //MLP with averaged weights
 	private NeuralNetwork averagedNN; //NN with averaged weights
+	private boolean sparseFederatedMlpRun;
+	private List<SparseFederatedMlpModelSupport.TrainingExample> sparseMlpTestExamples;
+	private List<SparseFederatedMlpModelSupport.TrainingExample> sparseMlpRecExamples;
 	private String[] followeeNames;
 	private String[] followerNames;    // Added by Sepide
 	public List<String> datasetFollowees; //followees of whole dataset Sepide changed the private access modifier to public
@@ -457,7 +461,13 @@ public class RecommenderAgent extends Agent
 			
 			ACLMessage msg= myAgent.receive();
 			
-			if (msg!=null && msg.getOntology() == "Update Connected UserAgent List for this Rec Server" && msg.getPerformative() == ACLMessage.REQUEST)
+				if (msg == null)
+				{
+					block();
+					return;
+				}
+				
+				if ("Update Connected UserAgent List for this Rec Server".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST)
 			{
 				DFAgentDescription template = new DFAgentDescription();
 				ServiceDescription sd = new ServiceDescription();
@@ -1225,7 +1235,7 @@ public class RecommenderAgent extends Agent
 			}
 
 			//@Jason added new message to start recommending
-			if (msg!=null && msg.getOntology()=="Start Recommend Algorithms" && msg.getPerformative()==ACLMessage.REQUEST && calculateAlready==false)
+			if (msg!=null && "Start Recommend Algorithms".equals(msg.getOntology()) && msg.getPerformative()==ACLMessage.REQUEST && calculateAlready==false)
 			{
 
 				calculateAlready=true;
@@ -5177,7 +5187,17 @@ public class RecommenderAgent extends Agent
 					// }
 					
 					   
-					nodeMLP = new MultiLayerPerceptron(TransferFunctionType.TANH, numUniqueDocTerms, HIDDEN_NEURONS, numFollowees);
+					AlgorithmParameterSettings mlpSettings = effectiveAlgorithmSettings();
+					sparseFederatedMlpRun = AlgorithmParameterSettings.MLP_ENGINE_SPARSE_FEDERATED.equals(mlpSettings.getMlpEngine());
+					validateMlpConfiguration(mlpSettings.getMlpEngineLabel(), numUniqueDocTerms, mlpSettings.getMlpHiddenNeurons(), mlpSettings.getMlpHiddenLayers(), numFollowees, trainMLP.size(), testMLP.size(), recMLP.size());
+					if (sparseFederatedMlpRun)
+					{
+						runSparseFederatedMlp(mlpSettings, allUserDocumentsTFIDF, numUniqueDocTerms, numFollowees);
+					}
+					else
+					{
+						reportLegacyNeurophMlpConfiguration(mlpSettings, numUniqueDocTerms, numFollowees, trainMLP.size(), testMLP.size(), recMLP.size());
+						nodeMLP = createLegacyNeurophMlp(numUniqueDocTerms, mlpSettings.getMlpHiddenNeurons(), mlpSettings.getMlpHiddenLayers(), numFollowees);
 					SoftMax softMaxAct = new SoftMax(nodeMLP.getLayers().get(nodeMLP.getLayers().size()-1));
 					int hiddenLayers = nodeMLP.getLayersCount() - 2;
 					System.out.println("Number of Hidden Layers in Neuroph: "+ hiddenLayers);
@@ -5189,8 +5209,8 @@ public class RecommenderAgent extends Agent
 					}
 					
 					BackPropagation nodeLearningRule = (BackPropagation) nodeMLP.getLearningRule();
-					nodeLearningRule.setLearningRate(LEARNING_RATE_MLP);
-					nodeLearningRule.setMaxError(MAX_ERROR_MLP);  
+					nodeLearningRule.setLearningRate(mlpSettings.getMlpLearningRate());
+					nodeLearningRule.setMaxError(mlpSettings.getMlpMaxError());  
 					
 					System.out.println(getLocalName()+" training MLP");
 					
@@ -5251,7 +5271,15 @@ public class RecommenderAgent extends Agent
 							}
 						}
 						
-						double accuracy = (double) correctPredictions / testMLP.size() * 100.0;
+						double accuracy = Double.NaN;
+						if (testMLP.size() > 0)
+						{
+							accuracy = (double) correctPredictions / testMLP.size() * 100.0;
+						}
+						else
+						{
+							System.out.println(getLocalName()+" warning: Legacy Neuroph MLP has no test rows; accuracy diagnostic skipped.");
+						}
 						//S System.out.println("Accuracy: " + String.format("%.2f%%", accuracy));
 
 						
@@ -5413,6 +5441,7 @@ public class RecommenderAgent extends Agent
 						endTimeAlgorithm = System.nanoTime();
 						completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
 					}
+					}
 					
 				  }   
 
@@ -5456,7 +5485,7 @@ public class RecommenderAgent extends Agent
 						// there is no library to average the weights for Doc2Vec 
 					}				   
 				
-				  if (algorithmRec == MLP && numRecAgents > 1)
+				  if (algorithmRec == MLP && numRecAgents > 1 && !sparseFederatedMlpRun)
 				{
 					//System.out.println("test if algorithmRec == MLP && numRecAgents > 1 ");
 					
@@ -5493,7 +5522,15 @@ public class RecommenderAgent extends Agent
 							}
 						}
 						
-						double accuracy = (double) correctPredictions / testMLP.size() * 100.0;
+						double accuracy = Double.NaN;
+						if (testMLP.size() > 0)
+						{
+							accuracy = (double) correctPredictions / testMLP.size() * 100.0;
+						}
+						else
+						{
+							System.out.println(getLocalName()+" warning: Legacy Neuroph MLP has no test rows; accuracy diagnostic skipped.");
+						}
 						//S System.out.println("Accuracy: " + accuracy + "%");
 						//S myGui.appendResult("MLP Accuracy: " + String.format("%.2f%%", accuracy));
 					
@@ -5549,6 +5586,10 @@ public class RecommenderAgent extends Agent
                          } */ 
 					
 				 }   
+				  else if (algorithmRec == MLP && numRecAgents > 1 && sparseFederatedMlpRun)
+				 {
+					System.out.println(getLocalName()+" waiting for averaged Sparse Federated MLP weights");
+				 }
 				  else
 				 { 
 					//Added in @Jason display text processing wb/tfidf kmean/cosSIM time in ms
@@ -5602,7 +5643,7 @@ public class RecommenderAgent extends Agent
 			
 			// Code added by Sepide 
 			
-			/* if (msg!=null && msg.getOntology() == "Sepide Testing")  {
+			/* if (msg!=null && "Sepide Testing".equals(msg.getOntology()))  {
 				
   
                         try {
@@ -5645,7 +5686,38 @@ public class RecommenderAgent extends Agent
 			// End of code added by Sepide 
 			
 			
-			  if (msg!=null && msg.getOntology() == "Averaged MLP Complete")
+
+			  if (msg != null && "Averaged Sparse MLP Complete".equals(msg.getOntology()))
+			{
+				System.out.println(getLocalName()+" received Averaged Sparse MLP Complete");
+				try
+				{
+					SparseFederatedMlpModelSupport.SparseMlpModel averagedSparseMLP =
+							SparseFederatedMlpModelSupport.SparseMlpModel.load(new File(msg.getContent()));
+					startTimeAlgorithm = System.nanoTime();
+					startTimeTest = System.nanoTime();
+					testSparseFederatedMlp(averagedSparseMLP, sparseMlpTestExamples);
+					endTimeTest = System.nanoTime();
+					completionTimeTest = endTimeTest - startTimeTest;
+					recSparseFederatedMlp(averagedSparseMLP, sparseMlpRecExamples);
+					endTimeAlgorithm = System.nanoTime();
+					completionTimeAlgorithm += (endTimeAlgorithm - startTimeAlgorithm);
+					recordMlpTimingAndPublishScores("Sparse Federated MLP");
+					publishFinalTfidfAndMergeScores();
+				}
+				catch (Exception ex)
+				{
+					ex.printStackTrace();
+					throw new RuntimeException("Sparse Federated MLP averaging failed: "+ex.getMessage(), ex);
+				}
+			}
+
+			  if (msg != null && "Averaged Sparse MLP Failed".equals(msg.getOntology()))
+			{
+				throw new RuntimeException("Sparse Federated MLP averaging failed: "+msg.getContent());
+			}
+
+			  if (msg!=null && "Averaged MLP Complete".equals(msg.getOntology()))
 			{
 				
 				//May-1 2023 MultilayerPerceptron averagedMLP = new MultilayerPerceptron(); 
@@ -5876,19 +5948,288 @@ public class RecommenderAgent extends Agent
 			return;
 		}
 
+
+		private AlgorithmParameterSettings effectiveAlgorithmSettings()
+		{
+			try
+			{
+				if (myGui != null)
+				{
+					return AlgorithmParameterSettings.effective(myGui.getAlgorithmParameterSettings());
+				}
+				return AlgorithmParameterSettings.effective(AlgorithmParameterSettings.fromSystemProperties());
+			}
+			catch (RuntimeException ex)
+			{
+				System.out.println(getLocalName()+" falling back to default MLP settings: "+ex.getMessage());
+				return AlgorithmParameterSettings.defaults();
+			}
+		}
+
+		private MultiLayerPerceptron createLegacyNeurophMlp(int inputCount, int hiddenNeurons, int hiddenLayers, int outputCount)
+		{
+			int safeHiddenLayers = Math.max(1, hiddenLayers);
+			int safeHiddenNeurons = Math.max(1, hiddenNeurons);
+			if (safeHiddenLayers == 1)
+			{
+				return new MultiLayerPerceptron(TransferFunctionType.TANH, inputCount, safeHiddenNeurons, outputCount);
+			}
+			int[] layers = new int[safeHiddenLayers + 2];
+			layers[0] = inputCount;
+			for (int i = 1; i <= safeHiddenLayers; i++)
+			{
+				layers[i] = safeHiddenNeurons;
+			}
+			layers[layers.length - 1] = outputCount;
+			return new MultiLayerPerceptron(TransferFunctionType.TANH, layers);
+		}
+
+		private void validateMlpConfiguration(String engine, int featureCount, int hiddenNeurons, int hiddenLayers, int outputCount, int trainRows, int testRows, int recRows)
+		{
+			if (featureCount <= 0)
+			{
+				throw new IllegalStateException(engine+" cannot run: no TF-IDF features were built.");
+			}
+			if (outputCount <= 0)
+			{
+				throw new IllegalStateException(engine+" cannot run: no followee/output classes were found.");
+			}
+			if (trainRows <= 0)
+			{
+				throw new IllegalStateException(engine+" cannot run: the training set is empty.");
+			}
+			if (recRows <= 0)
+			{
+				throw new IllegalStateException(engine+" cannot run: no recommendation target rows were prepared.");
+			}
+			if (hiddenLayers <= 0 || hiddenNeurons <= 0)
+			{
+				throw new IllegalStateException(engine+" has invalid hidden-layer settings.");
+			}
+			if (testRows <= 0)
+			{
+				System.out.println(getLocalName()+" warning: "+engine+" has no test rows; recommendation scoring will continue.");
+			}
+		}
+
+		private void reportLegacyNeurophMlpConfiguration(AlgorithmParameterSettings settings, int featureCount, int outputCount, int trainRows, int testRows, int recRows)
+		{
+			long estimatedMb = estimateDenseMlpMegabytes(featureCount, settings.getMlpHiddenNeurons(), settings.getMlpHiddenLayers(), outputCount, trainRows + testRows + recRows);
+			String detail = "Legacy Neuroph MLP shape: features="+featureCount
+					+", hiddenLayers="+settings.getMlpHiddenLayers()
+					+", hiddenNeurons="+settings.getMlpHiddenNeurons()
+					+", outputs="+outputCount
+					+", train="+trainRows
+					+", test="+testRows
+					+", recommend="+recRows
+					+", denseEstimate="+estimatedMb+" MB";
+			System.out.println(getLocalName()+" "+detail);
+			if (myGui != null)
+			{
+				myGui.appendResult(detail);
+			}
+		}
+
+		private long estimateDenseMlpMegabytes(int featureCount, int hiddenNeurons, int hiddenLayers, int outputCount, int rowCount)
+		{
+			long denseRows = (long)Math.max(1, rowCount) * (long)(Math.max(1, featureCount) + Math.max(1, outputCount)) * 8L;
+			long modelWeights = ((long)Math.max(1, featureCount) * Math.max(1, hiddenNeurons)
+					+ (long)Math.max(0, hiddenLayers - 1) * Math.max(1, hiddenNeurons) * Math.max(1, hiddenNeurons)
+					+ (long)Math.max(1, hiddenNeurons) * Math.max(1, outputCount)) * 8L;
+			return Math.max(1L, (denseRows + modelWeights) / (1024L * 1024L));
+		}
+
+		private void runSparseFederatedMlp(AlgorithmParameterSettings settings, LinkedHashMap<String,LinkedHashMap<String,Double>> allUserDocumentsTFIDF, int numUniqueDocTerms, int numFollowees)
+		{
+			System.out.println(getLocalName()+" training Sparse Federated MLP");
+			Map<String,Integer> sparseTermIndex = buildSparseMlpTermIndex(allUniqueDocTerms);
+			List<SparseFederatedMlpModelSupport.TrainingExample> sparseTrainExamples = createSparseMlpExamples(trainSetUsers, allUserDocumentsTFIDF, sparseTermIndex, true);
+			sparseMlpTestExamples = createSparseMlpExamples(testSetUsers, allUserDocumentsTFIDF, sparseTermIndex, true);
+			sparseMlpRecExamples = createSparseMlpExamples(usersRec, allUserDocumentsTFIDF, sparseTermIndex, true);
+			validateMlpConfiguration(settings.getMlpEngineLabel(), numUniqueDocTerms, settings.getMlpHiddenNeurons(), settings.getMlpHiddenLayers(), numFollowees, sparseTrainExamples.size(), sparseMlpTestExamples.size(), sparseMlpRecExamples.size());
+			SparseFederatedMlpModelSupport.SparseMlpModel model = SparseFederatedMlpModelSupport.SparseMlpModel.create(numUniqueDocTerms, settings.getMlpHiddenLayers(), settings.getMlpHiddenNeurons(), numFollowees, 31L + Integer.parseInt(nodeNumber));
+			startTimeTrain = System.nanoTime();
+			model.train(sparseTrainExamples, settings.getMlpSparseEpochs(), settings.getMlpLearningRate(), settings.getMlpSparseL2(), settings.getMlpFedProxMu());
+			endTimeTrain = System.nanoTime();
+			completionTimeTrain = endTimeTrain - startTimeTrain;
+			if (numRecAgents < 2)
+			{
+				startTimeTest = System.nanoTime();
+				testSparseFederatedMlp(model, sparseMlpTestExamples);
+				endTimeTest = System.nanoTime();
+				completionTimeTest = endTimeTest - startTimeTest;
+				recSparseFederatedMlp(model, sparseMlpRecExamples);
+				endTimeAlgorithm = System.nanoTime();
+				completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
+				recordMlpTimingAndPublishScores("Sparse Federated MLP");
+			}
+			else
+			{
+				endTimeAlgorithm = System.nanoTime();
+				completionTimeAlgorithm = endTimeAlgorithm - startTimeAlgorithm;
+				String nnDirName = "Stored_NN/";
+				File nnDir = new File(nnDirName);
+				if (!nnDir.exists())
+				{
+					nnDir.mkdirs();
+				}
+				String nodeSparseFileName = nnDirName+getLocalName()+"_SparseMLP.ser";
+				try
+				{
+					model.save(new File(nodeSparseFileName));
+				}
+				catch (IOException ex)
+				{
+					throw new RuntimeException("Could not save Sparse Federated MLP model: "+ex.getMessage(), ex);
+				}
+				ACLMessage toAverageWeightsMsg = new ACLMessage(ACLMessage.INFORM);
+				toAverageWeightsMsg.addReceiver(new AID("Organizing Agent1", AID.ISLOCALNAME));
+				toAverageWeightsMsg.setPerformative(ACLMessage.INFORM);
+				toAverageWeightsMsg.setOntology("Average Sparse MLP");
+				toAverageWeightsMsg.setContent(nodeSparseFileName);
+				send(toAverageWeightsMsg);
+				System.out.println(getLocalName()+" sent Average Sparse MLP model");
+			}
+		}
+
+		private Map<String,Integer> buildSparseMlpTermIndex(TreeSet<String> uniqueDocTerms)
+		{
+			Map<String,Integer> index = new LinkedHashMap<String,Integer>();
+			int counter = 0;
+			for (String term : uniqueDocTerms)
+			{
+				index.put(term, counter++);
+			}
+			return index;
+		}
+
+		private List<SparseFederatedMlpModelSupport.TrainingExample> createSparseMlpExamples(Collection<String> users, LinkedHashMap<String,LinkedHashMap<String,Double>> allUserDocumentsTFIDF, Map<String,Integer> termIndex, boolean requireLabel)
+		{
+			List<SparseFederatedMlpModelSupport.TrainingExample> examples = new ArrayList<SparseFederatedMlpModelSupport.TrainingExample>();
+			if (users == null)
+			{
+				return examples;
+			}
+			for (String user : users)
+			{
+				Map<String,Double> tfidf = allUserDocumentsTFIDF.get(user);
+				if (tfidf == null)
+				{
+					continue;
+				}
+				String followee = userFollowee.get(user);
+				Integer labelIndex = followee == null ? null : followeeIndex.get(followee);
+				if (requireLabel && labelIndex == null)
+				{
+					continue;
+				}
+				Map<Integer,Double> sparse = new LinkedHashMap<Integer,Double>();
+				for (Map.Entry<String,Double> entry : tfidf.entrySet())
+				{
+					Integer index = termIndex.get(entry.getKey());
+					if (index != null && entry.getValue() != null && entry.getValue().doubleValue() != 0.0)
+					{
+						sparse.put(index, entry.getValue());
+					}
+				}
+				examples.add(new SparseFederatedMlpModelSupport.TrainingExample(user, sparse, labelIndex == null ? -1 : labelIndex.intValue()));
+			}
+			return examples;
+		}
+
+		private void testSparseFederatedMlp(SparseFederatedMlpModelSupport.SparseMlpModel model, List<SparseFederatedMlpModelSupport.TrainingExample> examples)
+		{
+			if (examples == null || examples.isEmpty())
+			{
+				System.out.println(getLocalName()+" Sparse Federated MLP has no test examples.");
+				return;
+			}
+			int correct = 0;
+			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
+			{
+				double[] output = model.predict(example.getFeatures());
+				if (findIndexOfMaxValue(output) == example.getLabelIndex())
+				{
+					correct++;
+				}
+			}
+			double accuracy = (100.0 * correct) / Math.max(1, examples.size());
+			System.out.println(getLocalName()+" Sparse Federated MLP test accuracy: "+accuracy+"%");
+		}
+
+		private void recSparseFederatedMlp(SparseFederatedMlpModelSupport.SparseMlpModel model, List<SparseFederatedMlpModelSupport.TrainingExample> examples)
+		{
+			allUserScores = new TreeMap<String,TreeMap<String,Double>>();
+			if (examples == null)
+			{
+				return;
+			}
+			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
+			{
+				double[] output = model.predict(example.getFeatures());
+				TreeMap<String,Double> userScores = new TreeMap<String,Double>();
+				for (int i = 0; i < output.length && i < followeeNames.length; i++)
+				{
+					userScores.put(followeeNames[i], Math.max(0.0, output[i] * 100.0));
+				}
+				allUserScores.put(example.getUser(), userScores);
+			}
+		}
+
+		private void recordMlpTimingAndPublishScores(String label)
+		{
+			myGui.appendResult("Completion time: " + convertMs(completionTimeAlgorithm));
+			textprocessing_wb_or_tfidf_Data.add("MLP=TP+TFIDF+" + label + "\t" + agentName + "\t" + tweetCount + "\t" + completionTimeTextProcessing + "\t" + completionTimeTFIDF + "\t" + completionTimeAlgorithm + "\t" + System.getProperty("line.separator"));
+			System.out.println("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " " + label + ": " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
+			myGui.appendResult("Mapper"+nodeNumber+"- Total Tweets Processed: " + tweetCount + " TP: " + convertMs(completionTimeTextProcessing) + " ms TFIDF: " + convertMs(completionTimeTFIDF) + " ms Reducer"+ nodeNumber+ " " + label + ": " + convertMs(completionTimeAlgorithm) + " ms MLP Train: "+ convertMs(completionTimeTrain) + " ms MLP Test: "+ convertMs(completionTimeTest) +" ms Total: " + convertMs(completionTimeTextProcessing+completionTimeTFIDF+completionTimeAlgorithm)+" ms");
+		}
+
+		private void publishFinalTfidfAndMergeScores()
+		{
+			for (String s : textprocessing_wb_or_tfidf_Data){
+				System.out.print(s);
+			}
+
+			myGui.setTPTime(completionTimeTextProcessing/1000000.00);
+			myGui.setTfidfTime(completionTimeTFIDF/1000000.00);
+			myGui.setAlgorithmTime(completionTimeAlgorithm/1000000.00);
+
+			String outputFilename = "Results/Timing/" + referenceUser + "/" + "Distributed_Server_TP_TFIDF_Algorithm" + numRecAgents + ".txt";
+			try {
+				saveToFile_array(outputFilename, textprocessing_wb_or_tfidf_Data, "append");
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			textprocessing_wb_or_tfidf_Data.clear();
+
+			ACLMessage msg7 = new ACLMessage( ACLMessage.INFORM );
+			msg7.addReceiver( new AID("Starter Agent", AID.ISLOCALNAME) );
+			msg7.setPerformative( ACLMessage.INFORM );
+			msg7.setContent("Tweeting TFIDF Algorithm Calculation Completed");
+			msg7.setOntology("Tweets TFIDF Algorithm Calculation Done");
+			send(msg7);
+
+			ACLMessage toMergeMsg = new ACLMessage(ACLMessage.INFORM);
+			toMergeMsg.addReceiver( new AID("Organizing Agent1", AID.ISLOCALNAME) );
+			toMergeMsg.setPerformative(ACLMessage.INFORM);
+			toMergeMsg.setOntology("Merge Lists");
+			try {
+				toMergeMsg.setContentObject((Serializable) allUserScores);
+				send(toMergeMsg);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+
 	    // Method added by Sepide
 		
 		private boolean isCorrectPrediction(double[] networkOutput, double[] expectedOutput) {
-		// Round the network's output to the nearest integer (0 or 1)
-		int predicted = (int) Math.round(networkOutput[0]);
-
-		// Check if the predicted value matches the expected value
-		if(predicted == expectedOutput[0]) {
-			return true;
-				} else {
-					return false;
-				}
+			if (networkOutput == null || expectedOutput == null || networkOutput.length == 0 || expectedOutput.length == 0)
+			{
+				return false;
 			}
+			return findIndexOfMaxValue(networkOutput) == findIndexOfMaxValue(expectedOutput);
+		}
 		
 		// End of method added by Sepide 
 		

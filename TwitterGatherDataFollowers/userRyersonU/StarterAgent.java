@@ -334,7 +334,7 @@ public class StarterAgent extends Agent
 				}
 				
 				//Get message passing cost from each node if there is more than 1 node
-				if (msg!=null && msg.getOntology() == "Message Passing Cost" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Message Passing Cost".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					
 					messagePassingCostReceived++;
@@ -351,7 +351,7 @@ public class StarterAgent extends Agent
 
 				}
 				
-				if (msg!=null && msg.getOntology() == "Message Passing Time" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Message Passing Time".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					messagePassingTimesReceived++;
 					System.out.println("StarterAgent Message Passing Time Received: "+ Long.valueOf(msg.getContent()));
@@ -366,7 +366,7 @@ public class StarterAgent extends Agent
 
 				}
 
-				if (msg!=null && msg.getOntology() == "Tweeting Completed" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Tweeting Completed".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					//System.out.println(getLocalName()+" Tweeting Completed from: "+msg.getSender().getLocalName());
 					ACLMessage reply = msg.createReply();
@@ -436,7 +436,7 @@ public class StarterAgent extends Agent
 				}
 
 				//@Jason added remove user from total number of users msg from recommender agent
-				if (msg!=null && msg.getOntology() == "Remove Users From Total" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Remove Users From Total".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					ArrayList<String> usersToRemove;
 					try {
@@ -480,7 +480,7 @@ public class StarterAgent extends Agent
 
 				/*
 				//@Jason added remove user from total number of users msg from recommenderagent
-				if (msg!=null && msg.getOntology() == "Remove This User From List of Agents" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Remove This User From List of Agents".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					int indexToRemove = 0;
 
@@ -500,7 +500,7 @@ public class StarterAgent extends Agent
 				}
 				 */
 				//@Jason added wait for all recommender agents to finish text processing before calculating recommendations
-				if (msg!=null && msg.getOntology() == "Text Processing Complete" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Text Processing Complete".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					numOfRecAgentsCount++;
 					System.out.println(getLocalName()+" Text Processing Completed: "+numOfRecAgentsCount);
@@ -570,7 +570,7 @@ public class StarterAgent extends Agent
 				}
 
 				//Msg from rec agents
-				if (msg!=null && msg.getOntology() == "Tweets TFIDF Algorithm Calculation Done" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Tweets TFIDF Algorithm Calculation Done".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 					tfidfservercount++;
 					System.out.println(getLocalName()+" received: Tweets TFIDF Algorithm Calculation Done");
@@ -584,7 +584,7 @@ public class StarterAgent extends Agent
 						tfidfservercount = 0;
 					}
 				}
-				if (msg!=null && msg.getOntology()=="Merge Lists Completed" && msg.getPerformative() == ACLMessage.INFORM)
+				if (msg!=null && "Merge Lists Completed".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
 				{
 
 					System.out.println(getLocalName()+" received Merge Lists Completed");
@@ -628,7 +628,7 @@ public class StarterAgent extends Agent
 				}
 
 				//When user got its recommendation list
-				if (msg!=null && msg.getOntology() == "Querying Done from Organizing Agent" && msg.getPerformative() == ACLMessage.INFORM) 
+				if (msg!=null && "Querying Done from Organizing Agent".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM) 
 				{
 					queryUserCounter++;
 					numberofusers_counter++;

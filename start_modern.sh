@@ -50,4 +50,16 @@ if [ "$major_version" -lt 3 ] || ([ "$major_version" -eq 3 ] && [ "$minor_versio
     exit 1
 fi
 
+mkdir -p classes
+echo "Compiling Java sources..."
+if ! javac -nowarn -cp "lib/*" -d classes TwitterGatherDataFollowers/userRyersonU/*.java; then
+    echo "Java compilation failed. ControllerAgent.class was not created."
+    exit 1
+fi
+
+if [ ! -f classes/TwitterGatherDataFollowers/userRyersonU/ControllerAgent.class ]; then
+    echo "ControllerAgent.class was not created under classes/TwitterGatherDataFollowers/userRyersonU."
+    exit 1
+fi
+
 java $JAVA_OPTS -cp "lib/*:classes" jade.Boot $JADE_OPTS controller:TwitterGatherDataFollowers.userRyersonU.ControllerAgent

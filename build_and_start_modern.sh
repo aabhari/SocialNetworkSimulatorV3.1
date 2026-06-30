@@ -82,11 +82,16 @@ if ! $PYTHON_CMD -c "import matplotlib" &> /dev/null; then
     $PYTHON_CMD -m pip install matplotlib
 fi
 
-if ! $PYTHON_CMD -c "import ipython" &> /dev/null; then
-    echo "Installing ipython..."
-    $PYTHON_CMD -m pip install ipython
+mkdir -p classes
+echo "Compiling Java sources..."
+if ! javac -nowarn -cp "lib/*" -d classes TwitterGatherDataFollowers/userRyersonU/*.java; then
+    echo "Java compilation failed. ControllerAgent.class was not created."
+    exit 1
 fi
 
-javac -nowarn -cp "lib/*" -d classes TwitterGatherDataFollowers/userRyersonU/*.java
+if [ ! -f classes/TwitterGatherDataFollowers/userRyersonU/ControllerAgent.class ]; then
+    echo "ControllerAgent.class was not created under classes/TwitterGatherDataFollowers/userRyersonU."
+    exit 1
+fi
 
 java $JAVA_OPTS -cp "lib/*:classes" jade.Boot $JADE_OPTS controller:TwitterGatherDataFollowers.userRyersonU.ControllerAgent

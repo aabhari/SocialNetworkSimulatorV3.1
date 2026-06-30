@@ -836,7 +836,7 @@ public class ControllerAgent extends GuiAgent {
 		numTweetsGenerated = (Integer) ev.getParameter(12);
 		
 		
-		tweetDelay = TWEET_DELAY;
+		tweetDelay = (myGui == null || myGui.isSimulateTweetDelayEnabled()) ? TWEET_DELAY : 1L;
 
 		initialized = true;
 		usersRec = myGui.getUsersRec();
@@ -964,7 +964,7 @@ public class ControllerAgent extends GuiAgent {
 					
 
 
-					long userTweetDelay = calculateTweetDelay(user);
+					long userTweetDelay = getConfiguredTweetDelay(user);
 
 					
 //					userFollowTweetCounts = new LinkedHashMap<String,Integer>();
@@ -1208,7 +1208,7 @@ public class ControllerAgent extends GuiAgent {
 						recServers.add(smallestBinIndex);
 					}
 
-					long userTweetDelay = calculateTweetDelay(user);
+					long userTweetDelay = getConfiguredTweetDelay(user);
 
 					
 //					userFollowTweetCounts = new LinkedHashMap<String,Integer>();
@@ -1507,7 +1507,7 @@ public class ControllerAgent extends GuiAgent {
 					
 					System.out.println("Controller recServers: "+user+" "+recServers+" smallestBinIndex: "+smallestBinIndex);
 					
-					long userTweetDelay = calculateTweetDelay(user);
+					long userTweetDelay = getConfiguredTweetDelay(user);
 
 					
 //					userFollowTweetCounts = new LinkedHashMap<String,Integer>();
@@ -1808,7 +1808,7 @@ public class ControllerAgent extends GuiAgent {
 
 					userAgentArgs[12] = 1;
 					userAgentArgs[13] = 1;	
-					userAgentArgs[14] = tweetDelay;
+					userAgentArgs[14] = getConfiguredTweetDelay(tweetDelay);
 
 					//@Jason added limit and referenceUser;
 					userAgentArgs[15]=totalTweetLimit;
@@ -2302,6 +2302,24 @@ public class ControllerAgent extends GuiAgent {
 		return generatedWord;
 	}
 	
+	public long getConfiguredTweetDelay(String username)
+	{
+		if (myGui != null && !myGui.isSimulateTweetDelayEnabled())
+		{
+			return 1L;
+		}
+		return calculateTweetDelay(username);
+	}
+
+	public long getConfiguredTweetDelay(long defaultDelay)
+	{
+		if (myGui != null && !myGui.isSimulateTweetDelayEnabled())
+		{
+			return 1L;
+		}
+		return defaultDelay;
+	}
+
 	public long calculateTweetDelay(String username)
 	{
 		int numUserTweets = availableDb.getTweetCountFromUser(username);
@@ -3090,14 +3108,7 @@ public class ControllerAgent extends GuiAgent {
 					uniqueWordCount++;
 				}
 				
-				String attributeClass = "@attribute result ";
-				StringJoiner classJoiner = new StringJoiner(",","{","}");
-				for (String className: followeeFollowers.keySet())
-				{
-					classJoiner.add(className);
-				}
-				
-				attributeClass += classJoiner.toString();
+				String attributeClass = formatArffClassAttribute(followeeFollowers.keySet());
 				
 				bufferedWriterTrain.write(attributeClass);
 				bufferedWriterTrain.newLine();
@@ -3157,7 +3168,7 @@ public class ControllerAgent extends GuiAgent {
 					Map<String,Double> currDocTfidf = allUserDocumentsTFIDF.get(currUser);
 					tfidfJoiner = vectorArffFormat(currDocTfidf,allUniqueDocTerms);
 					
-					bufferedWriterTrain.write(tfidfJoiner.toString() + "," + userFollowee.get(currUser));
+					bufferedWriterTrain.write(tfidfJoiner.toString() + "," + formatArffClassValue(userFollowee.get(currUser)));
 					bufferedWriterTrain.newLine();
 					
 				}
@@ -3195,6 +3206,32 @@ public class ControllerAgent extends GuiAgent {
 			tfidfJoinerTemp.add(String.valueOf(currTfidf));
 		}
 		return tfidfJoinerTemp;
+	}
+	
+	private String formatArffClassAttribute(Iterable<String> classNames)
+	{
+		StringJoiner classJoiner = new StringJoiner(",","{","}");
+		for (String className: classNames)
+		{
+			classJoiner.add(formatArffClassValue(className));
+		}
+		return "@attribute result " + classJoiner.toString();
+	}
+	
+	private String formatArffClassValue(String className)
+	{
+		if (className == null)
+		{
+			return "?";
+		}
+		
+		String escapedClassName = className
+				.replace("\\", "\\\\")
+				.replace("'", "\\'")
+				.replace('\r', ' ')
+				.replace('\n', ' ');
+		
+		return "'" + escapedClassName + "'";
 	}
 	
 	public ArrayList<Tweet> getDistributedTestSet()

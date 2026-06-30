@@ -233,6 +233,10 @@ public class MobileAgent extends Agent {
 		final MessageTemplate mt_organizingAgent = MessageTemplate.and(  
 				MessageTemplate.MatchPerformative( ACLMessage.REQUEST ),
 				MessageTemplate.MatchSender( new AID("Organizing Agent1", AID.ISLOCALNAME))) ;
+		final MessageTemplate mt_scoresForUser = MessageTemplate.and(
+				mt_organizingAgent,
+				MessageTemplate.MatchOntology("Scores for User"));
+		final MessageTemplate mt_communication = MessageTemplate.not(mt_scoresForUser);
 
 		if (readFrom == FROM_DB)
 		{
@@ -459,21 +463,26 @@ public class MobileAgent extends Agent {
 			}
 		};
 
-		Communication = new TickerBehaviour( this, 1 ) {
+		Communication = new CyclicBehaviour( this ) {
 			private static final long serialVersionUID = 1L;
-			protected void onTick() {
+			public void action() {
 //				ACLMessage msg = myAgent.receive(mt_startAgent);
-				ACLMessage msg = myAgent.receive();
+				ACLMessage msg = myAgent.receive(mt_communication);
+				if (msg == null)
+				{
+					block();
+					return;
+				}
 
 				//@Jason if user is not in db after text processing, change canQuery to false from Rec agent
-				if (msg!=null && msg.getOntology() == "Denied Querying" && msg.getPerformative() == ACLMessage.REQUEST) 
+				if (msg!=null && "Denied Querying".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST) 
 				{
 					canQuery = false;
 					System.out.println(this.getAgent().getLocalName()+" Denied Querying\tcanQuery = "+canQuery);
 				}
 
 				//Message from starter agent
-				if (msg!=null && msg.getOntology() == "Start SIM" && msg.getPerformative() == ACLMessage.REQUEST) 
+				if (msg!=null && "Start SIM".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST) 
 				{
 					conversationIDReceived = msg.getConversationId();
 
@@ -507,7 +516,7 @@ public class MobileAgent extends Agent {
 				}
 
 				//Msg starter agent
-				if (msg!=null && msg.getOntology() == "Stop Tweeting" && msg.getPerformative() == ACLMessage.REQUEST) 
+				if (msg!=null && "Stop Tweeting".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST) 
 				{
 					endTweetTime = System.currentTimeMillis();
 					
@@ -520,15 +529,15 @@ public class MobileAgent extends Agent {
 
 
 				//Msg sent from no one
-				if (msg!=null && msg.getOntology() == "Stop Querying" && msg.getPerformative() == ACLMessage.REQUEST) 
+				if (msg!=null && "Stop Querying".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST) 
 				{
 					System.out.println(getLocalName()+" received Stop Querying");
 					removeBehaviour( Querying );
 				}
 
 				//@Jason added canQuery condition, msg from starter agent
-				if (msg!=null && msg.getOntology() == "Start Querying" && msg.getPerformative() == ACLMessage.REQUEST && canQuery==true)
-					//if (msg!=null && msg.getOntology() == "Start Querying" && msg.getPerformative() == ACLMessage.REQUEST) 
+				if (msg!=null && "Start Querying".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST && canQuery==true)
+					//if (msg!=null && "Start Querying".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST) 
 				{
 					//removeBehaviour( Tweeting );
 					addBehaviour( Querying );
@@ -570,7 +579,7 @@ public class MobileAgent extends Agent {
 				
 			// Code added by Sepide 
 				
-		   /* if (msg!=null && msg.getOntology() == "Tweet Sepide")
+		   /* if (msg!=null && "Tweet Sepide".equals(msg.getOntology()))
 			{
 				tweetCount++;
 				if (tweetCount == 1)
@@ -662,9 +671,15 @@ public class MobileAgent extends Agent {
 			private static final long serialVersionUID = 1L;
 			public void action() {
 
-				ACLMessage msg = myAgent.receive(mt_organizingAgent);
+				ACLMessage msg = myAgent.receive(mt_scoresForUser);
 
-				if (msg!=null && msg.getOntology() == "Scores for User") 
+					if (msg == null)
+					{
+						block();
+						return;
+					}
+
+					if ("Scores for User".equals(msg.getOntology())) 
 				{
 					System.out.println(myAgent.getLocalName()+" Scores for User Received");
 

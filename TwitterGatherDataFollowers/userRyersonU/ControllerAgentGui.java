@@ -75,6 +75,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	public int listSize;
 
 	public JComboBox<String> algorithmSelectionBox;
+	private JButton mlpSettingsButton;
+	private AlgorithmParameterSettings algorithmParameterSettings = AlgorithmParameterSettings.defaults();
 	private JComboBox<String> mapperSelectionBox;
 	private JComboBox<String> reducerSelectionBox;
 	public JComboBox<String> simulationSelectionBox;             // added by Sepide
@@ -136,6 +138,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	private JCheckBox removeHashTags;
 	private JCheckBox removeRetweets;
 	private JCheckBox removeStopWords;
+	private JCheckBox simulateTweetDelay;
 	private DefaultListModel<String> agentsList;
 	public JList showAgentsList;
 	private Border blackBorder;
@@ -436,6 +439,15 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		algorithmSelectionBox.setSelectedIndex(K_MEANS);
 		((JLabel)algorithmSelectionBox.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);
 		algorithmSelectionBox.addActionListener(new AlgorithmSelectionListener());
+		mlpSettingsButton = new JButton("MLP Settings");
+		mlpSettingsButton.setEnabled(false);
+		mlpSettingsButton.setToolTipText("Available when MLP is selected.");
+		mlpSettingsButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				showMlpSettingsDialog();
+			}
+		});
+		refreshMlpSettingsButton();
 		
 		String[] simulationSelection = {"0", "1", "2", "3", "4", "5"};       // added by Sepide 
 		simulationSelectionBox = new JComboBox<String>(simulationSelection);       // added by Sepide 
@@ -456,12 +468,49 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		reducerSelectionBox.addActionListener(new ReducerSelectionListener());
 	}
 
+
+	public AlgorithmParameterSettings getAlgorithmParameterSettings()
+	{
+		return algorithmParameterSettings.copy();
+	}
+
+	private void showMlpSettingsDialog()
+	{
+		AlgorithmParameterSettings updated = MlpSettingsDialog.showDialog(this, algorithmParameterSettings);
+		if (updated != null)
+		{
+			algorithmParameterSettings = updated.copy();
+			refreshMlpSettingsButton();
+		}
+	}
+
+	private void refreshMlpSettingsButton()
+	{
+		if (mlpSettingsButton == null)
+		{
+			return;
+		}
+		boolean isMlp = algorithmSelectionBox != null && algorithmSelectionBox.getSelectedIndex() == MLP;
+		mlpSettingsButton.setEnabled(isMlp);
+		if (isMlp)
+		{
+			mlpSettingsButton.setText("MLP Settings (" + algorithmParameterSettings.profileLabel() + ")");
+			mlpSettingsButton.setToolTipText(algorithmParameterSettings.summaryForMlp());
+		}
+		else
+		{
+			mlpSettingsButton.setText("MLP Settings");
+			mlpSettingsButton.setToolTipText("Available when MLP is selected.");
+		}
+	}
+
 	class AlgorithmSelectionListener implements ActionListener
 	{
 		public void actionPerformed(ActionEvent event)
 		{
 			System.out.println("algorithmSelectionBox.getSelectedIndex(): "+ algorithmSelectionBox.getSelectedIndex());
 			algorithmRec = algorithmSelectionBox.getSelectedIndex();
+			refreshMlpSettingsButton();
 		}
 	}
 
@@ -675,6 +724,12 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		removeStopWords.setFont(new Font("Arial",Font.BOLD,12));
 		removeStopWords.setSelected(true);
 		removeStopWords.addItemListener(new RemoveBoxListener());
+
+		simulateTweetDelay = new JCheckBox("Simulate Tweet Delay");
+		simulateTweetDelay.setForeground(Color.WHITE);
+		simulateTweetDelay.setFont(new Font("Arial",Font.BOLD,12));
+		simulateTweetDelay.setSelected(true);
+		simulateTweetDelay.setToolTipText("Selected: original DSMP MobileAgent tweet timing delay. Unselected: minimum-delay replay for faster experiments.");
 	}
 
 	class RemoveBoxListener implements ItemListener
@@ -1040,8 +1095,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		 */
 		inputDbPanel.add(logo);
 
-//		labNameLabel = new JLabel("DSMP Lab: Dr. Abdolreza Abhari, Sepideh Banihashemi");
-		labNameLabel = new JLabel("DSMP Lab: Dr. Abdolreza Abhari");
+		labNameLabel = new JLabel("DSMP Lab: Dr. Abdolreza Abhari, Sepideh Banihashemi");
 		labNameLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 		labNameLabel.setForeground(Color.WHITE);
 		labNameLabel.setFont(new Font("Arial",Font.PLAIN,20));
@@ -1085,6 +1139,8 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		initializationsPanel.add(recommendationField);
 		initializationsPanel.add(algorithmLabel);
 		initializationsPanel.add(algorithmSelectionBox);
+		initializationsPanel.add(new JLabel("MLP Settings: "));
+		initializationsPanel.add(mlpSettingsButton);
 		initializationsPanel.add(simulationNumber);      // added by Sepide
 		initializationsPanel.add(simulationSelectionBox);        // added by Sepide
 		initializationsPanel.setBorder(initializationTitle);
@@ -1092,6 +1148,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		textProcessingPanel.add(removeHashTags);
 		textProcessingPanel.add(removeRetweets);
 		textProcessingPanel.add(removeStopWords);
+		textProcessingPanel.add(simulateTweetDelay);
 		
 		commandsPanel.add(getUsersButton);
 		commandsPanel.add(initializeButton);
@@ -1483,6 +1540,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		ge.addParameter(numTweetsGenerated);
 		myAgent.postGuiEvent(ge);
 
+	}
+
+	public boolean isSimulateTweetDelayEnabled()
+	{
+		return simulateTweetDelay == null || simulateTweetDelay.isSelected();
 	}
 
 	public void startSimulation()

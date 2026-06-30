@@ -121,6 +121,8 @@ public class OrganizingAgent extends Agent
 	private List<MultiLayerPerceptron> listMLP;
 	private List<NeuralNetwork> listNN;
 	private int averageWeightCount;
+	private List<String> sparseMlpModelPaths;
+	private int sparseAverageWeightCount;
 
 	protected void setup() 
 	{
@@ -141,6 +143,8 @@ public class OrganizingAgent extends Agent
 			listMLP = new ArrayList<MultiLayerPerceptron>();
 			listNN = new ArrayList<NeuralNetwork>();
 			averageWeightCount = 0;
+			sparseMlpModelPaths = new ArrayList<String>();
+			sparseAverageWeightCount = 0;
 		}
 			
 
@@ -210,8 +214,13 @@ public class OrganizingAgent extends Agent
 
 		public void action() {
 			ACLMessage msg = this.myAgent.receive();
+			if (msg == null)
+			{
+				block();
+				return;
+			}
 			//Message from user agents
-			if (msg!=null && msg.getOntology() == "Ready")
+			if ("Ready".equals(msg.getOntology()))
 			{
 //				++numberofusers;
 
@@ -287,7 +296,7 @@ public class OrganizingAgent extends Agent
 
 			}
 
-			if (msg != null && msg.getOntology()== "Merge Lists")
+			if (msg != null && "Merge Lists".equals(msg.getOntology()))
 			{
 				
 				recMergeCount++;
@@ -426,7 +435,7 @@ public class OrganizingAgent extends Agent
 			}
 
 			//Message from user agent to get scores
-			if (msg!=null && msg.getOntology() == "Get Score List")		
+			if (msg!=null && "Get Score List".equals(msg.getOntology()))		
 			{
 				usersRequestedCount++;
 
@@ -474,7 +483,7 @@ public class OrganizingAgent extends Agent
 			}
 
 			//Message from user agent that user received score list
-			if (msg!=null && msg.getOntology()=="Scores Received")
+			if (msg!=null && "Scores Received".equals(msg.getOntology()))
 			{
 				long messagePassTime;
 				String requestedBy = msg.getSender().getLocalName().split("-",2)[0];
@@ -494,9 +503,49 @@ public class OrganizingAgent extends Agent
 				send(queryDoneMsg);
 			}
 			
+
+			if (msg != null && "Average Sparse MLP".equals(msg.getOntology()))
+			{
+				sparseAverageWeightCount++;
+				if (sparseMlpModelPaths == null)
+				{
+					sparseMlpModelPaths = new ArrayList<String>();
+				}
+				sparseMlpModelPaths.add(msg.getContent());
+				System.out.println(getLocalName()+" received Average Sparse MLP sparseAverageWeightCount: "+sparseAverageWeightCount);
+				if (sparseAverageWeightCount == allRecAgents.length)
+				{
+					String nnDirName = "Stored_NN/";
+					File nnDir = new File(nnDirName);
+					if (!nnDir.exists())
+					{
+						nnDir.mkdirs();
+					}
+					String averagedSparseFileName = nnDirName+"averaged_sparse_MLP_weights.ser";
+					ACLMessage averagedMsg = new ACLMessage(ACLMessage.INFORM);
+					for(int i=0; i<allRecAgents.length; i++)
+					{
+						averagedMsg.addReceiver(allRecAgents[i]);
+					}
+					try
+					{
+						SparseFederatedMlpModelSupport.saveAveragedModel(sparseMlpModelPaths, averagedSparseFileName);
+						averagedMsg.setOntology("Averaged Sparse MLP Complete");
+						averagedMsg.setContent(averagedSparseFileName);
+					}
+					catch (Exception ex)
+					{
+						ex.printStackTrace();
+						averagedMsg.setOntology("Averaged Sparse MLP Failed");
+						averagedMsg.setContent(ex.getClass().getSimpleName()+": "+ex.getMessage());
+					}
+					send(averagedMsg);
+				}
+			}
+
 			//Message from multiple rec agents to average weight for general MLP
 						
-			if (msg!=null && msg.getOntology()=="Average Weights MLP")
+			if (msg!=null && "Average Weights MLP".equals(msg.getOntology()))
 			{   
 				averageWeightCount++;
 				MultiLayerPerceptron receivedMLP = null;
