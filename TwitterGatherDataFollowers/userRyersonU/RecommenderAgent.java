@@ -6142,6 +6142,7 @@ public class RecommenderAgent extends Agent
 			if (examples == null || examples.isEmpty())
 			{
 				System.out.println(getLocalName()+" Sparse Federated MLP has no test examples.");
+				appendSparseMlpClassificationResult(0, 0);
 				return;
 			}
 			int correct = 0;
@@ -6154,7 +6155,23 @@ public class RecommenderAgent extends Agent
 				}
 			}
 			double accuracy = (100.0 * correct) / Math.max(1, examples.size());
-			System.out.println(getLocalName()+" Sparse Federated MLP test accuracy: "+accuracy+"%");
+			appendSparseMlpClassificationResult(correct, examples.size());
+			String accuracyLine = getLocalName()+" Sparse Federated MLP test accuracy: "+String.format("%.2f%%", accuracy);
+			System.out.println(accuracyLine);
+			if (myGui != null)
+			{
+				myGui.appendResult(accuracyLine);
+			}
+		}
+
+		private void appendSparseMlpClassificationResult(int correctlyClassified, int totalInstances)
+		{
+			String classificationLine = getLocalName()+" Correctly classified: "+correctlyClassified+ " Total instances: "+totalInstances;
+			System.out.println(classificationLine);
+			if (myGui != null)
+			{
+				myGui.appendResult(classificationLine);
+			}
 		}
 
 		private void recSparseFederatedMlp(SparseFederatedMlpModelSupport.SparseMlpModel model, List<SparseFederatedMlpModelSupport.TrainingExample> examples)
