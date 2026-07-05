@@ -1042,7 +1042,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		initializationTitle.setTitleJustification(TitledBorder.CENTER);
 		initializationTitle.setTitleFont(new Font("Arial",Font.BOLD,20));
 		initializationTitle.setTitleColor(Color.WHITE);
-		labNameTitle = BorderFactory.createTitledBorder(empty,"DSMP Lab");
+		labNameTitle = BorderFactory.createTitledBorder(empty,"DSMP Lab V2.6");
 		labNameTitle.setTitleJustification(TitledBorder.CENTER);
 		labNameTitle.setTitleFont(new Font("Arial",Font.PLAIN,20));
 		labNameTitle.setTitleColor(Color.WHITE);
