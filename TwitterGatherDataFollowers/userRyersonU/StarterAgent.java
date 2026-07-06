@@ -115,6 +115,7 @@ import org.gephi.preview.api.*;       // added by Sepide
 public class StarterAgent extends Agent 
 {
 	private static final long serialVersionUID = 1L;
+	private static final String ALL_TWEETS_DELIVERED_ONTOLOGY = "All Tweets Delivered";
 
 	private AID[] alltfidfserviceAgents;
 	private AID controllerAID;
@@ -377,16 +378,24 @@ public class StarterAgent extends Agent
 
 					numberofusers_counter++;
 
-					//@Jason changed to numberofuserparticipated
-					if(numberofusers_counter == numberofuserparticipated)
-						//if(numberofusers_counter == numberofusers)
-					{
-						numberofusers_counter = 0;
-						//@Jason changed to -1 to reuse counter in ontology: Querying Done from Organizing Agent below
-						alltweetsflag = true;
-						System.out.println(myAgent.getLocalName()+" TWEETING COMPLETED numberofusers: "+numberofusers);
+						//@Jason changed to numberofuserparticipated
+						if(numberofusers_counter == numberofuserparticipated)
+							//if(numberofusers_counter == numberofusers)
+						{
+							numberofusers_counter = 0;
+							//@Jason changed to -1 to reuse counter in ontology: Querying Done from Organizing Agent below
+							alltweetsflag = true;
+							System.out.println(myAgent.getLocalName()+" TWEETING COMPLETED numberofusers: "+numberofusers);
+							ACLMessage allTweetsDeliveredMessage = new ACLMessage(ACLMessage.INFORM);
+							for (int i = 0; i < alltfidfserviceAgents.length; i++)
+							{
+								allTweetsDeliveredMessage.addReceiver(alltfidfserviceAgents[i]);
+							}
+							allTweetsDeliveredMessage.setContent("All Tweets Delivered");
+							allTweetsDeliveredMessage.setOntology(ALL_TWEETS_DELIVERED_ONTOLOGY);
+							send(allTweetsDeliveredMessage);
 
-						// System.out.println("STARTER AGENT BEFORE CALCULATE MESSAGE PASSING COST TIME");
+							// System.out.println("STARTER AGENT BEFORE CALCULATE MESSAGE PASSING COST TIME");
 						//Get the max message passing time from nodes if more than 1 node
 						// if (alltfidfserviceAgents.length > 1)
 						// {

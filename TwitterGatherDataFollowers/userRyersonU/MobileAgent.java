@@ -147,6 +147,7 @@ public class MobileAgent extends Agent {
 	
 	private String followeeName;
 	private static final String TWEET_BATCH_ONTOLOGY = "Tweet Batch From User Agent";
+	private static final String TWEET_BATCH_PRIMARY_REC_SERVER_PREFIX = "__PRIMARY_REC_SERVER__\t";
 
 
 	protected void setup() {
@@ -1876,12 +1877,13 @@ public class MobileAgent extends Agent {
 	
 	private boolean useTextBatchMode()
 	{
-		return readFrom == FROM_TEXT && algorithmRec != MLP;
+		return readFrom == FROM_TEXT;
 	}
 	
 	private boolean sendTweetsFromTextAsBatch()
 	{
-		ArrayList<String> tweetBatch = new ArrayList<String>(usersTweetFromDb.size());
+		ArrayList<String> tweetBatch = new ArrayList<String>(usersTweetFromDb.size() + 1);
+		tweetBatch.add(TWEET_BATCH_PRIMARY_REC_SERVER_PREFIX + connectedtoTfidfservernumber);
 		for (int i = usersTweetFromDb.size() - 1; i >= 0; i--)
 		{
 			tweetBatch.add(formatTweetMessage(usersTweetFromDb.get(i)));
@@ -1908,7 +1910,7 @@ public class MobileAgent extends Agent {
 		recServerBeginMessagePassingTime = System.nanoTime();
 		send(msgBatch);
 		
-		tweetCounter = tweetBatch.size();
+		tweetCounter = usersTweetFromDb.size();
 		if (followAfterTweet > 0 && tweetCounter >= followAfterTweet)
 		{
 			sendFollowedFromUserAgentMessage();

@@ -122,7 +122,9 @@ public class RecommenderAgent extends Agent
 	public static final int Doc2Vec = 4;     //added by Sepide
 	public static final int CommonNeighbors = 5;        // added by Sepide
 	public static final int K_MEANSEUCLIDEAN = 6;     // added by Sepide 
+	private static final String ALL_TWEETS_DELIVERED_ONTOLOGY = "All Tweets Delivered";
 	private static final String TWEET_BATCH_ONTOLOGY = "Tweet Batch From User Agent";
+	private static final String TWEET_BATCH_PRIMARY_REC_SERVER_PREFIX = "__PRIMARY_REC_SERVER__\t";
 	private static final double TEST_SET_PERCENT = 0.30;
 	private static final double TRAIN_SET_PERCENT = 0.70;
 	public static final int HIDDEN_NEURONS = 10;
@@ -160,6 +162,8 @@ public class RecommenderAgent extends Agent
 
 	private int tweetCount = 0; //Number of tweets currently received from user agents
 	private int tweetsToReceive = 100; //Total number of tweets the recommender is supposed to receive from user agents
+	private boolean tweetInputClosed = false;
+	private boolean textProcessingComplete = false;
 
 	private int numRecAgents =0;
 
@@ -459,15 +463,30 @@ public class RecommenderAgent extends Agent
 				getUserRecList = true;
 			}
 			
-			ACLMessage msg= myAgent.receive();
-			
+				boolean finishTextProcessingNow = false;
+				ACLMessage msg= myAgent.receive();
+
 				if (msg == null)
 				{
-					block();
+					if (tweetInputClosed && !textProcessingComplete && tweetCount > 0)
+					{
+						finishTextProcessingNow = true;
+					}
+					else
+					{
+						block();
+						return;
+					}
+				}
+
+				if (msg!=null && ALL_TWEETS_DELIVERED_ONTOLOGY.equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.INFORM)
+				{
+					tweetInputClosed = true;
+					block(50);
 					return;
 				}
-				
-				if ("Update Connected UserAgent List for this Rec Server".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST)
+
+				if (msg!=null && "Update Connected UserAgent List for this Rec Server".equals(msg.getOntology()) && msg.getPerformative() == ACLMessage.REQUEST)
 			{
 				DFAgentDescription template = new DFAgentDescription();
 				ServiceDescription sd = new ServiceDescription();
@@ -494,17 +513,17 @@ public class RecommenderAgent extends Agent
 
 			boolean receivedTweetData = false;
 			
-			if (msg!=null && "Tweet From User Agent".equals(msg.getOntology()))
+			if (!textProcessingComplete && msg!=null && "Tweet From User Agent".equals(msg.getOntology()))
 			{
 				receivedTweetData = recordTweetFromUserAgent(msg.getContent());
 			}
 			
-			if (msg!=null && TWEET_BATCH_ONTOLOGY.equals(msg.getOntology()))
+			if (!textProcessingComplete && msg!=null && TWEET_BATCH_ONTOLOGY.equals(msg.getOntology()))
 			{
 				receivedTweetData = recordTweetBatchFromUserAgent(msg);
 			}
 
-			if(receivedTweetData && tweetCount >= tweetsToReceive)
+			if(!textProcessingComplete && ((receivedTweetData && tweetCount >= tweetsToReceive) || finishTextProcessingNow))
 			{
 				long lastTweetTime = System.nanoTime();
 					/*System.out.println("tweetIdText: "+tweetIdText);
@@ -1230,9 +1249,10 @@ public class RecommenderAgent extends Agent
 					textProcessMessage.setOntology("Text Processing Complete");
 					send(textProcessMessage);
 
+					textProcessingComplete = true;
 					System.out.println(getLocalName()+ " Text Processing Complete");
 
-			}
+				}
 
 			//@Jason added new message to start recommending
 			if (msg!=null && "Start Recommend Algorithms".equals(msg.getOntology()) && msg.getPerformative()==ACLMessage.REQUEST && calculateAlready==false)
@@ -6474,7 +6494,12 @@ public class RecommenderAgent extends Agent
 			{
 				if (tweetObject instanceof String)
 				{
-					recordedAnyTweet = recordTweetFromUserAgent((String) tweetObject) || recordedAnyTweet;
+					String tweetMessage = (String) tweetObject;
+					if (tweetMessage.startsWith(TWEET_BATCH_PRIMARY_REC_SERVER_PREFIX))
+					{
+						continue;
+					}
+					recordedAnyTweet = recordTweetFromUserAgent(tweetMessage) || recordedAnyTweet;
 				}
 			}
 			
