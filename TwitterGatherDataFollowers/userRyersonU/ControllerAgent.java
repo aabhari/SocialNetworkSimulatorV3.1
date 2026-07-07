@@ -740,7 +740,7 @@ public class ControllerAgent extends GuiAgent {
 	public void startSimulation()
 	{
 		try{
-			Object[] starterAgentArgs = new Object[13];							
+			Object[] starterAgentArgs = new Object[14];
 			starterAgentArgs[0] = getAID();										
 			starterAgentArgs[1] = referenceUser;		//referenceUser			NOT USED IN STARTER AGENT ANYMORE			
 			starterAgentArgs[2] = "1"; //1
@@ -752,6 +752,7 @@ public class ControllerAgent extends GuiAgent {
 			//starterAgentArgs[10] = usersRec;
 			starterAgentArgs[11] = myGui;
 			starterAgentArgs[12] = numRecAgents;
+			starterAgentArgs[13] = getCurrentUserAgentNames();
 
 			String starterAgentName = "Starter Agent";
 			agentController = workContainer.createNewAgent(starterAgentName, StarterAgent.class.getName(), starterAgentArgs);
@@ -773,6 +774,19 @@ public class ControllerAgent extends GuiAgent {
 		
 		firstRun = false;
 		
+	}
+
+	private ArrayList<String> getCurrentUserAgentNames()
+	{
+		ArrayList<String> userAgentNames = new ArrayList<String>();
+		for (String agentName : listOfAgents)
+		{
+			if (agentName != null && agentName.endsWith("-UserAgent"))
+			{
+				userAgentNames.add(agentName);
+			}
+		}
+		return userAgentNames;
 	}
 
 	public void initializeSetup(GuiEvent ev)

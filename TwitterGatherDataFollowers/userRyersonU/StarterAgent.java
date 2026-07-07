@@ -54,6 +54,7 @@ import jade.domain.DFService;
 import jade.domain.FIPAException;
 
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
+import jade.domain.FIPAAgentManagement.SearchConstraints;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import jade.domain.JADEAgentManagement.JADEManagementOntology;
 import jade.domain.JADEAgentManagement.KillAgent;
@@ -116,6 +117,9 @@ public class StarterAgent extends Agent
 {
 	private static final long serialVersionUID = 1L;
 	private static final String ALL_TWEETS_DELIVERED_ONTOLOGY = "All Tweets Delivered";
+	private static final long USER_AGENT_DISCOVERY_TIMEOUT_MS = 120000L;
+	private static final long USER_AGENT_DISCOVERY_POLL_MS = 250L;
+	private static final long USER_AGENT_DISCOVERY_LOG_INTERVAL_MS = 5000L;
 
 	private AID[] alltfidfserviceAgents;
 	private AID controllerAID;
@@ -142,6 +146,7 @@ public class StarterAgent extends Agent
 
 	//@Jason changed datastructure of allUserAgents to a list
 	private ArrayList<AID> allUserAgentsList = new ArrayList<AID>();
+	private Set<String> expectedUserAgentNames = Collections.emptySet();
 
 	private ArrayList<String> usersRec;
 
@@ -176,6 +181,7 @@ public class StarterAgent extends Agent
 		//usersRec = (ArrayList<String>) args[10];
 		myGui = (ControllerAgentGui) args[11];
 		numNodes = (Integer) args[12];
+		expectedUserAgentNames = resolveExpectedUserAgentNames(args);
 
 
 		final int numberofuserparticipated = numberofusers;
@@ -232,23 +238,21 @@ public class StarterAgent extends Agent
 
 
 
-		//Set userAgentDFTemplate to look in DF for user agents
-		DFAgentDescription userAgentDFTemplate = new DFAgentDescription();
-		ServiceDescription sd = new ServiceDescription();
-		sd.setType("User-Agent");
-		userAgentDFTemplate.addServices(sd);
-
 		//@Jason using allUserAgentsList
-		try{
-			DFAgentDescription[] result = DFService.search(this, userAgentDFTemplate);
-			for (int i = 0; i < result.length; i++){
-				allUserAgentsList.add(result[i].getName());
-			}
+		ArrayList<AID> discoveredUserAgents =
+				getControllerProvidedUserAgentAids(numberofuserparticipated);
+		if (discoveredUserAgents == null)
+		{
+			discoveredUserAgents =
+					waitForExpectedUserAgents(numberofuserparticipated);
 		}
-
-		catch (FIPAException fe) {
-			fe.printStackTrace();
+		if (discoveredUserAgents == null)
+		{
+			doDelete();
+			return;
 		}
+		allUserAgentsList.clear();
+		allUserAgentsList.addAll(discoveredUserAgents);
 
 		//@Jason print out all the initial user agents
 		/*for (int i = 0; i < allUserAgentsList.size(); i++){
@@ -913,6 +917,222 @@ public class StarterAgent extends Agent
 		});
 
 
+	}
+
+	private ArrayList<AID> waitForExpectedUserAgents(int expectedUsers)
+	{
+		LinkedHashMap<String,AID> discovered =
+				new LinkedHashMap<String,AID>();
+		if (expectedUsers <= 0)
+		{
+			return new ArrayList<AID>(discovered.values());
+		}
+
+		long waitStartedAt = System.currentTimeMillis();
+		long lastProgressLogAt = 0L;
+		int lastLoggedCount = -1;
+
+		while (discovered.size() < expectedUsers)
+		{
+			try
+			{
+				DFAgentDescription[] result =
+						DFService.search(
+								this,
+								userAgentTemplate(),
+								userAgentSearchConstraints(expectedUsers));
+				rememberUserAgents(discovered, result);
+			}
+			catch (FIPAException fe)
+			{
+				reportUserAgentDiscoveryFailure(
+						"Could not discover user agents before starting the simulation.",
+						fe);
+				return null;
+			}
+
+			if (discovered.size() >= expectedUsers)
+			{
+				break;
+			}
+
+			long now = System.currentTimeMillis();
+			if (discovered.size() != lastLoggedCount
+					|| now - lastProgressLogAt
+							>= USER_AGENT_DISCOVERY_LOG_INTERVAL_MS)
+			{
+				lastLoggedCount = discovered.size();
+				lastProgressLogAt = now;
+				String line = "Starter Agent waiting for user-agent registration: "
+						+ discovered.size() + " of " + expectedUsers
+						+ " discovered.";
+				System.out.println(line);
+				if (myGui != null)
+				{
+					myGui.appendResult(line);
+				}
+			}
+
+			if (now - waitStartedAt >= USER_AGENT_DISCOVERY_TIMEOUT_MS)
+			{
+				reportUserAgentDiscoveryFailure(
+						"Simulation start timed out while waiting for user agents. "
+						+ "Discovered " + discovered.size() + " of "
+						+ expectedUsers + " expected participant(s). "
+						+ "Reset the experiment and initialize again.",
+						null);
+				return null;
+			}
+
+			doWait(USER_AGENT_DISCOVERY_POLL_MS);
+		}
+
+		if (discovered.size() > expectedUsers)
+		{
+			return new ArrayList<AID>(
+					new ArrayList<AID>(discovered.values()).subList(
+							0, expectedUsers));
+		}
+		return new ArrayList<AID>(discovered.values());
+	}
+
+	private ArrayList<AID> getControllerProvidedUserAgentAids(int expectedUsers)
+	{
+		if (expectedUserAgentNames == null || expectedUserAgentNames.isEmpty())
+		{
+			return null;
+		}
+		if (expectedUsers > 0 && expectedUserAgentNames.size() != expectedUsers)
+		{
+			reportUserAgentDiscoveryFailure(
+					"Controller provided " + expectedUserAgentNames.size()
+					+ " user agent(s), but the run expects " + expectedUsers
+					+ ". Falling back to JADE DF discovery.",
+					null);
+			return null;
+		}
+
+		ArrayList<AID> userAgents = new ArrayList<AID>();
+		for (String userAgentName : expectedUserAgentNames)
+		{
+			userAgents.add(new AID(userAgentName, AID.ISLOCALNAME));
+		}
+		String line = "Starter Agent using controller-provided user-agent roster: "
+				+ userAgents.size() + " of " + expectedUsers
+				+ " participant(s).";
+		System.out.println(line);
+		if (myGui != null)
+		{
+			myGui.appendResult(line);
+		}
+		return userAgents;
+	}
+
+	private DFAgentDescription userAgentTemplate()
+	{
+		DFAgentDescription userAgentDFTemplate =
+				new DFAgentDescription();
+		ServiceDescription sd = new ServiceDescription();
+		sd.setType("User-Agent");
+		userAgentDFTemplate.addServices(sd);
+		return userAgentDFTemplate;
+	}
+
+	private SearchConstraints userAgentSearchConstraints(int expectedUsers)
+	{
+		SearchConstraints constraints = new SearchConstraints();
+		constraints.setMaxResults(Long.valueOf(Math.max(expectedUsers, 1)));
+		return constraints;
+	}
+
+	private Set<String> resolveExpectedUserAgentNames(Object[] args)
+	{
+		if (args == null || args.length <= 13 || args[13] == null)
+		{
+			return Collections.emptySet();
+		}
+
+		LinkedHashSet<String> names = new LinkedHashSet<String>();
+		Object suppliedNames = args[13];
+		if (suppliedNames instanceof Collection)
+		{
+			for (Object suppliedName : (Collection<?>) suppliedNames)
+			{
+				addExpectedUserAgentName(names, suppliedName);
+			}
+		}
+		else if (suppliedNames instanceof String[])
+		{
+			String[] suppliedArray = (String[]) suppliedNames;
+			for (int i = 0; i < suppliedArray.length; i++)
+			{
+				addExpectedUserAgentName(names, suppliedArray[i]);
+			}
+		}
+		else
+		{
+			addExpectedUserAgentName(names, suppliedNames);
+		}
+		return Collections.unmodifiableSet(names);
+	}
+
+	private void addExpectedUserAgentName(Set<String> names, Object suppliedName)
+	{
+		if (names == null || suppliedName == null)
+		{
+			return;
+		}
+		String userAgentName = String.valueOf(suppliedName).trim();
+		if (userAgentName.length() > 0)
+		{
+			names.add(userAgentName);
+		}
+	}
+
+	private void rememberUserAgents(
+			Map<String,AID> discovered,
+			DFAgentDescription[] results)
+	{
+		if (discovered == null || results == null)
+		{
+			return;
+		}
+		for (int i = 0; i < results.length; i++)
+		{
+			if (results[i] == null || results[i].getName() == null)
+			{
+				continue;
+			}
+			AID aid = results[i].getName();
+			String key = aid.getLocalName();
+			if (key == null || key.length() == 0)
+			{
+				key = aid.getName();
+			}
+			if (key == null || key.length() == 0)
+			{
+				continue;
+			}
+			if (!discovered.containsKey(key))
+			{
+				discovered.put(key, aid);
+			}
+		}
+	}
+
+	private void reportUserAgentDiscoveryFailure(
+			String message,
+			Exception exception)
+	{
+		System.out.println(message);
+		if (myGui != null)
+		{
+			myGui.appendResult(message);
+		}
+		if (exception != null)
+		{
+			exception.printStackTrace();
+		}
 	}
 
 
