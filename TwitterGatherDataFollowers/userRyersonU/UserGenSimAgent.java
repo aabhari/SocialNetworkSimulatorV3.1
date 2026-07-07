@@ -1,15 +1,18 @@
 package TwitterGatherDataFollowers.userRyersonU;
  
 
+import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.io.FileInputStream;
 import java.io.BufferedInputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -1778,14 +1781,11 @@ public class UserGenSimAgent extends Agent
 	//Read text file of tweets and store into InMemoryDb
 	public void readFromTextFile()
 	{
-		try {
-			final char END_OF_TWEET = '\r';
-			int character;
-			StringBuffer lineBuffer = new StringBuffer(1024);
-			FileInputStream fileInput = new FileInputStream(corpusGenFile);
-			BufferedInputStream bufferedInput = new BufferedInputStream(fileInput);
-			
-
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(
+						new FileInputStream(corpusGenFile),
+						StandardCharsets.ISO_8859_1),
+				128 * 1024)) {
 			Long tweetId;
 			Long userId;
 			String tweetDate;
@@ -1803,58 +1803,42 @@ public class UserGenSimAgent extends Agent
 			List<Long> currentFolloweeTweetIds;
 			userTwitterId = new LinkedHashMap<String,Long>();
 			
-			while((character=bufferedInput.read())!=-1) {
+			String line;
+			while ((line = reader.readLine()) != null) {
+				// Accept LF, CRLF, CR, and EOF-terminated rows while preserving the
+				// original six-field parser used by v2.6 datasets.
+				String info[] = line.split("\t",6);
 
-				if (character==END_OF_TWEET) {
-					character = bufferedInput.read();
-					if (character!=-1 && character !='\n')
-					{
-						lineBuffer.append((char)character);
-					}
-					else if (character!=-1 && character == '\n')
-					{
-
-						String info[] = lineBuffer.toString().split("\t",6);
-						lineBuffer.setLength(0);
-
-						referenceUser = info[0];
-						tweetId = Long.valueOf(info[1]);
-						tweetDate = info[2];
-						userId = Long.valueOf(info[3]);
-						currentUserName = info[4];
-						tweetText = info[5];
-						
-						currentTweet = new Tweet(tweetText,tweetId,tweetDate,currentUserName);
-						
-						if (!userTwitterId.containsKey(currentUserName))
-							userTwitterId.put(currentUserName,userId);
-						
-						if (followeeCorpusTweetIds.keySet().contains(referenceUser))
-						{
-							currentFolloweeTweetIds = followeeCorpusTweetIds.get(referenceUser);
-						}
-						else
-						{
-							currentFolloweeTweetIds = new ArrayList<Long>();
-						}
-						
-						currentFolloweeTweetIds.add(tweetId);
-						followeeCorpusTweetIds.put(referenceUser,currentFolloweeTweetIds);
-						
-						tweetIdFolloweeName.put(tweetId,referenceUser);
-						
-						tweetsReadCount++;
-						
-						localDb.addTweet(currentTweet);
-
-					}
-				} else {
-					lineBuffer.append((char) character);
+				referenceUser = info[0];
+				tweetId = Long.valueOf(info[1]);
+				tweetDate = info[2];
+				userId = Long.valueOf(info[3]);
+				currentUserName = info[4];
+				tweetText = info[5];
+				
+				currentTweet = new Tweet(tweetText,tweetId,tweetDate,currentUserName);
+				
+				if (!userTwitterId.containsKey(currentUserName))
+					userTwitterId.put(currentUserName,userId);
+				
+				if (followeeCorpusTweetIds.keySet().contains(referenceUser))
+				{
+					currentFolloweeTweetIds = followeeCorpusTweetIds.get(referenceUser);
 				}
+				else
+				{
+					currentFolloweeTweetIds = new ArrayList<Long>();
+				}
+				
+				currentFolloweeTweetIds.add(tweetId);
+				followeeCorpusTweetIds.put(referenceUser,currentFolloweeTweetIds);
+				
+				tweetIdFolloweeName.put(tweetId,referenceUser);
+				
+				tweetsReadCount++;
+				
+				localDb.addTweet(currentTweet);
 			}
-
-			bufferedInput.close();
-			fileInput.close();
 
 			System.out.println(getLocalName()+" finished reading textfile lines: "+ tweetsReadCount);
 			

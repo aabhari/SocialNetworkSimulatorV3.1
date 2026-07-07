@@ -59,6 +59,10 @@ final class MlpSettingsDialog extends JDialog
         sparseEpochs = new JSpinner(new SpinnerNumberModel(settings.getMlpSparseEpochs(), 1, 500, 1));
         sparseL2 = new JSpinner(new SpinnerNumberModel(settings.getMlpSparseL2(), 0.0, 1.0, 0.0001));
         fedProxMu = new JSpinner(new SpinnerNumberModel(settings.getMlpFedProxMu(), 0.0, 10.0, 0.01));
+        engineBox.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent event) { refreshEngineFields(); }
+        });
+        refreshEngineFields();
 
         JPanel root = new JPanel(new BorderLayout(12, 12));
         root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
@@ -83,7 +87,9 @@ final class MlpSettingsDialog extends JDialog
         JTextArea text = new JTextArea(
                 "Default keeps the original v2.5 Neuroph behavior: one hidden layer, "
                 + "10 hidden neurons, learning rate 0.1, max error 0.01.\n"
-                + "Sparse Federated MLP is opt-in and experimental for large sparse TF-IDF data.");
+                + "Sparse Federated MLP is opt-in and experimental for large sparse TF-IDF data. "
+                + "Sparse uses hidden layers, hidden neurons, learning rate, epochs, L2, and FedProx; "
+                + "its default is 80 shuffled epochs, and max error is Legacy-only.");
         text.setEditable(false);
         text.setOpaque(true);
         text.setBackground(new Color(245, 248, 252));
@@ -159,6 +165,28 @@ final class MlpSettingsDialog extends JDialog
         sparseEpochs.setValue(Integer.valueOf(settings.getMlpSparseEpochs()));
         sparseL2.setValue(Double.valueOf(settings.getMlpSparseL2()));
         fedProxMu.setValue(Double.valueOf(settings.getMlpFedProxMu()));
+        refreshEngineFields();
+    }
+
+    private void refreshEngineFields()
+    {
+        boolean sparse = engineBox.getSelectedIndex() == 1;
+        maxError.setEnabled(!sparse);
+        sparseEpochs.setEnabled(sparse);
+        sparseL2.setEnabled(sparse);
+        fedProxMu.setEnabled(sparse);
+        maxError.setToolTipText(sparse
+                ? "Max error is used by Legacy Neuroph MLP. Sparse Federated MLP uses Sparse epochs instead."
+                : "Legacy Neuroph MLP stopping error.");
+        sparseEpochs.setToolTipText(sparse
+                ? "Number of Sparse Federated MLP training epochs."
+                : "Only used by Sparse Federated MLP.");
+        sparseL2.setToolTipText(sparse
+                ? "L2 regularization used by Sparse Federated MLP."
+                : "Only used by Sparse Federated MLP.");
+        fedProxMu.setToolTipText(sparse
+                ? "FedProx proximal regularization used by Sparse Federated MLP."
+                : "Only used by Sparse Federated MLP.");
     }
 
     private void applyAndClose()

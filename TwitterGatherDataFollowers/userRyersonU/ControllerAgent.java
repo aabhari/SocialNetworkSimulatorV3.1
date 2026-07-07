@@ -9,6 +9,7 @@ import java.sql.Timestamp;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.lang.*;   //added by Sepide
 import java.util.regex.Matcher;
@@ -2388,13 +2389,11 @@ public class ControllerAgent extends GuiAgent {
 	//Read text file of tweets and store into InMemoryDb
 	public void readFromTextFile()
 	{
-		try {
-			final char END_OF_TWEET = '\r';
-			int character;
-			StringBuffer lineBuffer = new StringBuffer(1024);
-			FileInputStream fileInput = new FileInputStream(textFile);
-			BufferedInputStream bufferedInput = new BufferedInputStream(fileInput);
-			
+		try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(
+						new FileInputStream(textFile),
+						StandardCharsets.ISO_8859_1),
+				128 * 1024)) {
 			Long tweetId;
 			String tweetDate;
 			String currentUserName;
@@ -2410,81 +2409,42 @@ public class ControllerAgent extends GuiAgent {
 			tweetIdUser.clear();
 			userFolloweeMap.clear();
 			
-			while((character=bufferedInput.read())!=-1) {
-				//FileWriter writer = new FileWriter("dummy_out.txt", true); //append
-				//BufferedWriter bufferedWriter = new BufferedWriter(writer);
-				//System.out.println("character: "+character);
-				if (character==END_OF_TWEET) {
-					character = bufferedInput.read();
-					if (character!=-1 && character !='\n')
-					{
-						lineBuffer.append((char)character);
-					}
-					else if (character!=-1 && character == '\n')
-					{
-						// Here is where something is done with each line
-						//System.out.println("lineBuffer: "+lineBuffer);
-						//bufferedWriter.write("lineBuffer: "+lineBuffer);
-						//bufferedWriter.newLine();
-						//bufferedWriter.close();
-						//linecount++;
-						String info[] = lineBuffer.toString().split("\t",6);
-						lineBuffer.setLength(0);
-						//for (String s : info)
-						//{
-						//	System.out.print(s+",");
-						//}
-						//System.out.println();
+			String line;
+			while ((line = reader.readLine()) != null) {
+				// Accept LF, CRLF, CR, and EOF-terminated rows while preserving the
+				// original six-field parser used by v2.6 datasets.
+				String info[] = line.split("\t",6);
 
-//						referenceUser = info[0];
-//						Long tweetId = Long.valueOf(info[1]);
-//						String tweetDate = info[2];
-//						String currentUserName = info[4];
-//						String tweetText = info[5];
-//						boolean dateRangeValid = true;
-//
-//						//dateRangeValid = checkDateRange(tweetDate,"2007-01-01","2017-01-01");
-//						dateRangeValid = checkDateRange(tweetDate,beginDate,endDate);
-//
-//						Tweet currentTweet = new Tweet(tweetText,tweetId,tweetDate,currentUserName);
-						followeeName = info[0];
-						referenceUser = info[0];
-						tweetId = Long.valueOf(info[1]);
-						tweetDate = info[2];
-						currentUserName = info[4];
-						tweetText = info[5];
-						
-						//dateRangeValid = checkDateRange(tweetDate,"2007-01-01","2017-01-01");
-						dateRangeValid = checkDateRange(tweetDate,beginDate,endDate);
+				followeeName = info[0];
+				referenceUser = info[0];
+				tweetId = Long.valueOf(info[1]);
+				tweetDate = info[2];
+				currentUserName = info[4];
+				tweetText = info[5];
+				
+				//dateRangeValid = checkDateRange(tweetDate,"2007-01-01","2017-01-01");
+				dateRangeValid = checkDateRange(tweetDate,beginDate,endDate);
 
-						currentTweet = new Tweet(tweetText,tweetId,tweetDate,currentUserName);
-						
-						
+				currentTweet = new Tweet(tweetText,tweetId,tweetDate,currentUserName);
+				
+				
 
-						tweetsReadCount++;
-						
-						if (dateRangeValid)
-						{
-							localDb.addTweet(currentTweet);
-							
-							tweetIdText.put(tweetId, tweetText);
-							tweetIdUser.put(tweetId, currentUserName);
-							
-							if (!userFollowee.containsKey(currentUserName))
-								userFollowee.put(currentUserName,followeeName);
-							
-							if (!userFolloweeMap.containsKey(currentUserName))
-								userFolloweeMap.put(currentUserName,followeeName);
-						}
-
-					}
-				} else {
-					lineBuffer.append((char) character);
+				tweetsReadCount++;
+				
+				if (dateRangeValid)
+				{
+					localDb.addTweet(currentTweet);
+					
+					tweetIdText.put(tweetId, tweetText);
+					tweetIdUser.put(tweetId, currentUserName);
+					
+					if (!userFollowee.containsKey(currentUserName))
+						userFollowee.put(currentUserName,followeeName);
+					
+					if (!userFolloweeMap.containsKey(currentUserName))
+						userFolloweeMap.put(currentUserName,followeeName);
 				}
 			}
-
-			bufferedInput.close();
-			fileInput.close();
 
 		} catch (IOException e) {
 			// TODO Auto-generated catch block

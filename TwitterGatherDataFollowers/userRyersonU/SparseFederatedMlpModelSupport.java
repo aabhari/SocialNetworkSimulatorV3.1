@@ -9,7 +9,9 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -146,9 +148,19 @@ final class SparseFederatedMlpModelSupport
 			double safeFedProxMu = Math.max(0.0, fedProxMu);
 			double[][][] referenceWeights = deepCopy(weights);
 			double[][] referenceBiases = copyBiases(biases);
+			List<TrainingExample> shuffledExamples =
+					new ArrayList<TrainingExample>(examples);
+			Random shuffleRandom = new Random(89173L
+					+ (long)hiddenLayerCount * 1009L
+					+ (long)hiddenSize * 9176L
+					+ (long)outputSize * 65537L);
 			for (int epoch = 0; epoch < safeEpochs; epoch++)
 			{
-				for (TrainingExample example : examples)
+				if (shuffledExamples.size() > 1)
+				{
+					Collections.shuffle(shuffledExamples, shuffleRandom);
+				}
+				for (TrainingExample example : shuffledExamples)
 				{
 					trainOne(example, safeLearningRate, safeL2,
 							safeFedProxMu, referenceWeights, referenceBiases);
@@ -166,6 +178,16 @@ final class SparseFederatedMlpModelSupport
 		int getSampleCount()
 		{
 			return sampleCount;
+		}
+
+		int getHiddenLayerCount()
+		{
+			return hiddenLayerCount;
+		}
+
+		int getWeightLayerCount()
+		{
+			return weights.length;
 		}
 
 		void save(File file) throws IOException

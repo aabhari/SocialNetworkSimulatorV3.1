@@ -6050,6 +6050,92 @@ public class RecommenderAgent extends Agent
 			}
 		}
 
+		private void reportSparseFederatedMlpConfiguration(AlgorithmParameterSettings settings, int featureCount, int outputCount, int trainRows, int testRows, int recRows, SparseFederatedMlpModelSupport.SparseMlpModel model)
+		{
+			String detail = "Sparse Federated MLP shape: features="+featureCount
+					+", hiddenLayers="+model.getHiddenLayerCount()
+					+", hiddenNeurons="+settings.getMlpHiddenNeurons()
+					+", weightMatrices="+model.getWeightLayerCount()
+					+", outputs="+outputCount
+					+", train="+trainRows
+					+", test="+testRows
+					+", recommend="+recRows
+					+", epochs="+settings.getMlpSparseEpochs()
+					+", learningRate="+settings.getMlpLearningRate()
+					+", sparseL2="+settings.getMlpSparseL2()
+					+", fedProxMu="+settings.getMlpFedProxMu();
+			System.out.println(getLocalName()+" "+detail);
+			if (myGui != null)
+			{
+				myGui.appendResult(detail);
+			}
+		}
+
+		private void appendSparseMlpStatus(String detail)
+		{
+			String line = getLocalName()+" "+detail;
+			System.out.println(line);
+			if (myGui != null)
+			{
+				myGui.appendResult(line);
+			}
+		}
+
+		private int stabilizeSparseFederatedMlpTraining(
+				SparseFederatedMlpModelSupport.SparseMlpModel model,
+				List<SparseFederatedMlpModelSupport.TrainingExample> examples,
+				AlgorithmParameterSettings settings,
+				int outputCount,
+				int epochsAlready)
+		{
+			if (model == null || examples == null || examples.isEmpty()
+					|| outputCount < 2)
+			{
+				return epochsAlready;
+			}
+			int[] actualCounts = countSparseMlpActualLabels(examples, outputCount);
+			if (countNonZero(actualCounts) < 2)
+			{
+				return epochsAlready;
+			}
+			int totalEpochs = Math.max(1, epochsAlready);
+			int[] recoveryCheckpoints = new int[] {80, 160};
+			for (int i = 0; i < recoveryCheckpoints.length; i++)
+			{
+				if (!isSparseMlpPredictionCollapsed(model, examples, outputCount))
+				{
+					break;
+				}
+				int checkpoint = Math.min(500, recoveryCheckpoints[i]);
+				if (totalEpochs >= checkpoint)
+				{
+					continue;
+				}
+				int additionalEpochs = checkpoint - totalEpochs;
+				appendSparseMlpStatus("Sparse Federated MLP detected one-class training collapse after "
+						+totalEpochs+" epoch(s); continuing for "
+						+additionalEpochs+" additional shuffled epoch(s).");
+				model.train(
+						examples,
+						additionalEpochs,
+						settings.getMlpLearningRate(),
+						settings.getMlpSparseL2(),
+						settings.getMlpFedProxMu());
+				totalEpochs += additionalEpochs;
+			}
+			if (isSparseMlpPredictionCollapsed(model, examples, outputCount))
+			{
+				appendSparseMlpStatus("Sparse Federated MLP warning: training predictions are still collapsed to one class after "
+						+totalEpochs+" epoch(s). Lower the learning rate or increase hidden neurons/epochs before treating the accuracy as meaningful.");
+			}
+			else if (totalEpochs != Math.max(1, epochsAlready))
+			{
+				appendSparseMlpStatus("Sparse Federated MLP recovered class spread after "
+						+totalEpochs+" total shuffled epoch(s).");
+			}
+			return totalEpochs;
+		}
+
 		private long estimateDenseMlpMegabytes(int featureCount, int hiddenNeurons, int hiddenLayers, int outputCount, int rowCount)
 		{
 			long denseRows = (long)Math.max(1, rowCount) * (long)(Math.max(1, featureCount) + Math.max(1, outputCount)) * 8L;
@@ -6068,8 +6154,10 @@ public class RecommenderAgent extends Agent
 			sparseMlpRecExamples = createSparseMlpExamples(usersRec, allUserDocumentsTFIDF, sparseTermIndex, true);
 			validateMlpConfiguration(settings.getMlpEngineLabel(), numUniqueDocTerms, settings.getMlpHiddenNeurons(), settings.getMlpHiddenLayers(), numFollowees, sparseTrainExamples.size(), sparseMlpTestExamples.size(), sparseMlpRecExamples.size());
 			SparseFederatedMlpModelSupport.SparseMlpModel model = SparseFederatedMlpModelSupport.SparseMlpModel.create(numUniqueDocTerms, settings.getMlpHiddenLayers(), settings.getMlpHiddenNeurons(), numFollowees, 31L + Integer.parseInt(nodeNumber));
+			reportSparseFederatedMlpConfiguration(settings, numUniqueDocTerms, numFollowees, sparseTrainExamples.size(), sparseMlpTestExamples.size(), sparseMlpRecExamples.size(), model);
 			startTimeTrain = System.nanoTime();
 			model.train(sparseTrainExamples, settings.getMlpSparseEpochs(), settings.getMlpLearningRate(), settings.getMlpSparseL2(), settings.getMlpFedProxMu());
+			stabilizeSparseFederatedMlpTraining(model, sparseTrainExamples, settings, numFollowees, settings.getMlpSparseEpochs());
 			endTimeTrain = System.nanoTime();
 			completionTimeTrain = endTimeTrain - startTimeTrain;
 			if (numRecAgents < 2)
@@ -6166,16 +6254,30 @@ public class RecommenderAgent extends Agent
 				return;
 			}
 			int correct = 0;
+			int outputCount = Math.max(1, followeeNames == null ? 0 : followeeNames.length);
+			int[] predictedCounts = new int[outputCount];
+			int[] actualCounts = new int[outputCount];
 			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
 			{
 				double[] output = model.predict(example.getFeatures());
-				if (findIndexOfMaxValue(output) == example.getLabelIndex())
+				int predictedIndex = findIndexOfMaxValue(output);
+				if (predictedIndex >= 0 && predictedIndex < predictedCounts.length)
+				{
+					predictedCounts[predictedIndex]++;
+				}
+				if (example.getLabelIndex() >= 0
+						&& example.getLabelIndex() < actualCounts.length)
+				{
+					actualCounts[example.getLabelIndex()]++;
+				}
+				if (predictedIndex == example.getLabelIndex())
 				{
 					correct++;
 				}
 			}
 			double accuracy = (100.0 * correct) / Math.max(1, examples.size());
 			appendSparseMlpClassificationResult(correct, examples.size());
+			appendSparseMlpPredictionSpread("test", predictedCounts, actualCounts, examples.size());
 			String accuracyLine = getLocalName()+" Sparse Federated MLP test accuracy: "+String.format("%.2f%%", accuracy);
 			System.out.println(accuracyLine);
 			if (myGui != null)
@@ -6192,6 +6294,147 @@ public class RecommenderAgent extends Agent
 			{
 				myGui.appendResult(classificationLine);
 			}
+		}
+
+		private boolean isSparseMlpPredictionCollapsed(
+				SparseFederatedMlpModelSupport.SparseMlpModel model,
+				List<SparseFederatedMlpModelSupport.TrainingExample> examples,
+				int outputCount)
+		{
+			if (examples == null || examples.isEmpty() || outputCount < 2)
+			{
+				return false;
+			}
+			int[] actualCounts = countSparseMlpActualLabels(examples, outputCount);
+			if (countNonZero(actualCounts) < 2)
+			{
+				return false;
+			}
+			int[] predictedCounts = countSparseMlpPredictedLabels(model, examples, outputCount);
+			return countNonZero(predictedCounts) <= 1;
+		}
+
+		private int[] countSparseMlpPredictedLabels(
+				SparseFederatedMlpModelSupport.SparseMlpModel model,
+				List<SparseFederatedMlpModelSupport.TrainingExample> examples,
+				int outputCount)
+		{
+			int[] counts = new int[Math.max(1, outputCount)];
+			if (model == null || examples == null)
+			{
+				return counts;
+			}
+			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
+			{
+				double[] output = model.predict(example.getFeatures());
+				int predictedIndex = findIndexOfMaxValue(output);
+				if (predictedIndex >= 0 && predictedIndex < counts.length)
+				{
+					counts[predictedIndex]++;
+				}
+			}
+			return counts;
+		}
+
+		private int[] countSparseMlpActualLabels(
+				List<SparseFederatedMlpModelSupport.TrainingExample> examples,
+				int outputCount)
+		{
+			int[] counts = new int[Math.max(1, outputCount)];
+			if (examples == null)
+			{
+				return counts;
+			}
+			for (SparseFederatedMlpModelSupport.TrainingExample example : examples)
+			{
+				int labelIndex = example.getLabelIndex();
+				if (labelIndex >= 0 && labelIndex < counts.length)
+				{
+					counts[labelIndex]++;
+				}
+			}
+			return counts;
+		}
+
+		private void appendSparseMlpPredictionSpread(
+				String splitName,
+				int[] predictedCounts,
+				int[] actualCounts,
+				int totalInstances)
+		{
+			int predictedClasses = countNonZero(predictedCounts);
+			int actualClasses = countNonZero(actualCounts);
+			int topPredicted = indexOfMax(predictedCounts);
+			int topActual = indexOfMax(actualCounts);
+			String spreadLine = "Sparse Federated MLP "+splitName
+					+" prediction spread: predictedClasses="+predictedClasses
+					+"/"+Math.max(1, predictedCounts.length)
+					+", topPrediction="+labelForSparseMlpClass(topPredicted)
+					+" "+valueAt(predictedCounts, topPredicted)
+					+"/"+Math.max(1, totalInstances)
+					+", actualClasses="+actualClasses
+					+"/"+Math.max(1, actualCounts.length)
+					+", topActual="+labelForSparseMlpClass(topActual)
+					+" "+valueAt(actualCounts, topActual)
+					+"/"+Math.max(1, totalInstances);
+			appendSparseMlpStatus(spreadLine);
+			if (actualClasses > 1 && predictedClasses <= 1)
+			{
+				appendSparseMlpStatus("Sparse Federated MLP warning: "
+						+splitName+" predictions collapsed to one class, so the accuracy is near chance for a balanced multi-class set.");
+			}
+		}
+
+		private int countNonZero(int[] counts)
+		{
+			int nonZero = 0;
+			if (counts == null)
+			{
+				return nonZero;
+			}
+			for (int count : counts)
+			{
+				if (count > 0)
+				{
+					nonZero++;
+				}
+			}
+			return nonZero;
+		}
+
+		private int indexOfMax(int[] counts)
+		{
+			if (counts == null || counts.length == 0)
+			{
+				return -1;
+			}
+			int maxIndex = 0;
+			for (int i = 1; i < counts.length; i++)
+			{
+				if (counts[i] > counts[maxIndex])
+				{
+					maxIndex = i;
+				}
+			}
+			return maxIndex;
+		}
+
+		private int valueAt(int[] counts, int index)
+		{
+			if (counts == null || index < 0 || index >= counts.length)
+			{
+				return 0;
+			}
+			return counts[index];
+		}
+
+		private String labelForSparseMlpClass(int index)
+		{
+			if (followeeNames != null && index >= 0 && index < followeeNames.length)
+			{
+				return followeeNames[index];
+			}
+			return "class-"+index;
 		}
 
 		private void recSparseFederatedMlp(SparseFederatedMlpModelSupport.SparseMlpModel model, List<SparseFederatedMlpModelSupport.TrainingExample> examples)

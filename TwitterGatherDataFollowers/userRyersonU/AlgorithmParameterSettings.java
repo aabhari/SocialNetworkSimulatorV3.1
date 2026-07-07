@@ -92,7 +92,7 @@ final class AlgorithmParameterSettings implements Serializable
         mlpHiddenNeurons = 10;
         mlpLearningRate = 0.1;
         mlpMaxError = 0.01;
-        mlpSparseEpochs = 8;
+        mlpSparseEpochs = 80;
         mlpSparseL2 = 0.0001;
         mlpFedProxMu = 0.0;
     }
@@ -167,7 +167,7 @@ final class AlgorithmParameterSettings implements Serializable
         }
         if (MLP_ENGINE_SPARSE_FEDERATED.equals(mlpEngine))
         {
-            return "Sparse";
+            return "Sparse " + mlpHiddenLayers + "L";
         }
         return mlpHiddenLayers + " layer" + (mlpHiddenLayers == 1 ? "" : "s");
     }
@@ -175,6 +175,16 @@ final class AlgorithmParameterSettings implements Serializable
     String summaryForMlp()
     {
         AlgorithmParameterSettings effective = effective(this);
+        if (MLP_ENGINE_SPARSE_FEDERATED.equals(effective.getMlpEngine()))
+        {
+            return effective.getMlpEngineLabel()
+                    + ", " + effective.mlpHiddenLayers + " hidden layer(s)"
+                    + ", " + effective.mlpHiddenNeurons + " neuron(s)/layer"
+                    + ", rate " + effective.mlpLearningRate
+                    + ", epochs " + effective.mlpSparseEpochs
+                    + ", L2 " + effective.mlpSparseL2
+                    + ", FedProx " + effective.mlpFedProxMu;
+        }
         return effective.getMlpEngineLabel()
                 + ", " + effective.mlpHiddenLayers + " hidden layer(s)"
                 + ", " + effective.mlpHiddenNeurons + " neuron(s)/layer"
