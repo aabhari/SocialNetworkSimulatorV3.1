@@ -110,6 +110,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	public JButton startButton;
 	private JButton getUsersButton;
 	private JButton changePerformanceButton;
+	private JButton datasetImportLabButton;
 	private JButton changeUserSimButton;
 	private JButton helpUserSimButton;
 	private JButton exitButton;
@@ -798,7 +799,11 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		changePerformanceButton = new JButton("Performance Measurement");
 		changePerformanceButton.setFont(new Font("Arial",Font.BOLD,12));
 		changePerformanceButton.addActionListener(this);
-		
+
+		datasetImportLabButton = new JButton("Dataset Import Lab");
+		datasetImportLabButton.setFont(new Font("Arial",Font.BOLD,12));
+		datasetImportLabButton.addActionListener(this);
+
 		changeUserSimButton = new JButton("Return to User Sim");
 		changeUserSimButton.setFont(new Font("Arial",Font.BOLD,12));
 		changeUserSimButton.addActionListener(this);
@@ -1164,6 +1169,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		userGenOptionsPanel.add(setSimulatedTweetsButton);
 		userGenOptionsPanel.add(startUserSimButton);
 		userGenOptionsPanel.add(changePerformanceButton);
+		userGenOptionsPanel.add(datasetImportLabButton);
 		userGenOptionsPanel.add(exitButton);
 		
 		userGenResultsPanel.add(userGenTweetsScrollPane);
@@ -1253,6 +1259,10 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		{
 			changeCardPanel(CHANGE_TO_PERFORMANCE);
 		}
+		else if (event.getSource() == datasetImportLabButton)
+		{
+			showDatasetImportLab();
+		}
 		else if (event.getSource() == changeUserSimButton)
 		{
 			changeCardPanel(CHANGE_TO_USERSIM);
@@ -1307,9 +1317,45 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		
 		if (fileOption == FROM_TEXT)
-			myAgent.setReadFrom(FROM_TEXT);			
+			myAgent.setReadFrom(FROM_TEXT);
 	}
-	
+
+	private void showDatasetImportLab()
+	{
+		DatasetImportLabDialog dialog = new DatasetImportLabDialog(this);
+		dialog.setVisible(true);
+	}
+
+	void loadImportedDataset(File selectedFile, String experimentLabel)
+	{
+		if (selectedFile == null || !selectedFile.isFile())
+		{
+			JOptionPane.showMessageDialog(this,
+					"The imported dataset file could not be found.",
+					"Imported Dataset Missing",
+					JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		fileChooser.setSelectedFile(selectedFile);
+		if (selectedFile.getParentFile() != null)
+		{
+			fileChooser.setCurrentDirectory(selectedFile.getParentFile());
+		}
+		myAgent.setFile(selectedFile);
+		myAgent.setReadFrom(FROM_TEXT);
+		if (experimentLabel != null && experimentLabel.trim().length() > 0)
+		{
+			referenceUser = experimentLabel.trim();
+			enterDatasetField.setText(referenceUser);
+		}
+		changeCardPanel(CHANGE_TO_PERFORMANCE);
+		JOptionPane.showMessageDialog(this,
+				"Loaded imported DSMP dataset: " + selectedFile.getName()
+				+ "\nPress Get Users to inspect available recommendation targets.",
+				"Imported Dataset Loaded",
+				JOptionPane.INFORMATION_MESSAGE);
+	}
+
 	//user gen sim corpus chooser
 	public void selectCorpusFile()
 	{
@@ -1746,6 +1792,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	public void disableUserGenSimButtons()
 	{
 		changePerformanceButton.setEnabled(false);
+		datasetImportLabButton.setEnabled(false);
 		dataCollectionButton.setEnabled(false);
 		loadCorpusButton.setEnabled(false);
 		setSimulatedTweetsButton.setEnabled(false);
@@ -1755,6 +1802,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 	public void enableUserGenSimButtons()
 	{
 		changePerformanceButton.setEnabled(true);
+		datasetImportLabButton.setEnabled(true);
 		dataCollectionButton.setEnabled(true);
 		loadCorpusButton.setEnabled(true);
 		setSimulatedTweetsButton.setEnabled(true);
