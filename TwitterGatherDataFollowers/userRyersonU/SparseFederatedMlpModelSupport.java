@@ -25,6 +25,15 @@ import java.util.Random;
  */
 final class SparseFederatedMlpModelSupport
 {
+	static final long GLOBAL_INITIALIZATION_SEED = 20260708L;
+	static final String FEDAVG_UPDATE_ONTOLOGY = "Sparse MLP FedAvg Update";
+	static final String FEDAVG_ROUND_COMPLETE_ONTOLOGY = "Sparse MLP FedAvg Round Complete";
+	static final String FEDAVG_COMPLETE_ONTOLOGY = "Averaged Sparse MLP Complete";
+	static final String FEDAVG_FAILED_ONTOLOGY = "Averaged Sparse MLP Failed";
+	static final String EVALUATION_UPDATE_ONTOLOGY = "Sparse MLP Evaluation Update";
+	static final String EVALUATION_COMPLETE_ONTOLOGY = "Sparse MLP Evaluation Complete";
+	static final String EVALUATION_FAILED_ONTOLOGY = "Sparse MLP Evaluation Failed";
+
 	private SparseFederatedMlpModelSupport()
 	{
 	}
@@ -60,9 +69,196 @@ final class SparseFederatedMlpModelSupport
 		}
 	}
 
+	static final class FedAvgModelUpdate implements Serializable
+	{
+		private static final long serialVersionUID = 1L;
+
+		private final String modelPath;
+		private final int round;
+		private final int totalRounds;
+
+		FedAvgModelUpdate(String modelPath, int round, int totalRounds)
+		{
+			this.modelPath = modelPath;
+			this.round = round;
+			this.totalRounds = totalRounds;
+		}
+
+		String getModelPath()
+		{
+			return modelPath;
+		}
+
+		int getRound()
+		{
+			return round;
+		}
+
+		int getTotalRounds()
+		{
+			return totalRounds;
+		}
+	}
+
+	static final class FedAvgRoundModel implements Serializable
+	{
+		private static final long serialVersionUID = 1L;
+
+		private final String modelPath;
+		private final int round;
+		private final int totalRounds;
+
+		FedAvgRoundModel(String modelPath, int round, int totalRounds)
+		{
+			this.modelPath = modelPath;
+			this.round = round;
+			this.totalRounds = totalRounds;
+		}
+
+		String getModelPath()
+		{
+			return modelPath;
+		}
+
+		int getRound()
+		{
+			return round;
+		}
+
+		int getTotalRounds()
+		{
+			return totalRounds;
+		}
+	}
+
+	static final class Prediction implements Serializable
+	{
+		private static final long serialVersionUID = 1L;
+
+		private final String user;
+		private final int actualIndex;
+		private final int predictedIndex;
+
+		Prediction(String user, int actualIndex, int predictedIndex)
+		{
+			this.user = user;
+			this.actualIndex = actualIndex;
+			this.predictedIndex = predictedIndex;
+		}
+
+		String getUser()
+		{
+			return user;
+		}
+
+		int getActualIndex()
+		{
+			return actualIndex;
+		}
+
+		int getPredictedIndex()
+		{
+			return predictedIndex;
+		}
+
+		boolean isCorrect()
+		{
+			return actualIndex >= 0 && actualIndex == predictedIndex;
+		}
+	}
+
+	static final class EvaluationResult implements Serializable
+	{
+		private static final long serialVersionUID = 1L;
+
+		private final String sourceAgent;
+		private final List<Prediction> predictions;
+
+		EvaluationResult(String sourceAgent, List<Prediction> predictions)
+		{
+			this.sourceAgent = sourceAgent;
+			this.predictions = new ArrayList<Prediction>(
+					predictions == null ? Collections.<Prediction>emptyList()
+							: predictions);
+		}
+
+		String getSourceAgent()
+		{
+			return sourceAgent;
+		}
+
+		List<Prediction> getPredictions()
+		{
+			return predictions;
+		}
+	}
+
+	static final class AggregatedEvaluationResult implements Serializable
+	{
+		private static final long serialVersionUID = 1L;
+
+		private final int correctCount;
+		private final int totalInstances;
+		private final int duplicateInstances;
+		private final int[] predictedCounts;
+		private final int[] actualCounts;
+
+		AggregatedEvaluationResult(
+				int correctCount,
+				int totalInstances,
+				int duplicateInstances,
+				int[] predictedCounts,
+				int[] actualCounts)
+		{
+			this.correctCount = correctCount;
+			this.totalInstances = totalInstances;
+			this.duplicateInstances = duplicateInstances;
+			this.predictedCounts = predictedCounts == null
+					? new int[0]
+					: Arrays.copyOf(predictedCounts, predictedCounts.length);
+			this.actualCounts = actualCounts == null
+					? new int[0]
+					: Arrays.copyOf(actualCounts, actualCounts.length);
+		}
+
+		int getCorrectCount()
+		{
+			return correctCount;
+		}
+
+		int getTotalInstances()
+		{
+			return totalInstances;
+		}
+
+		int getDuplicateInstances()
+		{
+			return duplicateInstances;
+		}
+
+		int[] getPredictedCounts()
+		{
+			return Arrays.copyOf(predictedCounts, predictedCounts.length);
+		}
+
+		int[] getActualCounts()
+		{
+			return Arrays.copyOf(actualCounts, actualCounts.length);
+		}
+
+		double getAccuracyPercent()
+		{
+			return totalInstances <= 0
+					? 0.0 : (100.0 * correctCount) / totalInstances;
+		}
+	}
+
 	static final class SparseMlpModel implements Serializable
 	{
 		private static final long serialVersionUID = 1L;
+		private static final int DEEP_STABLE_LAYER_THRESHOLD = 4;
+		private static final double DEEP_STABLE_LEAKY_RELU_SLOPE = 0.01;
+		private static final double DEEP_STABLE_MAX_LEARNING_RATE = 0.03;
 
 		private final int inputSize;
 		private final int hiddenLayerCount;
@@ -104,23 +300,27 @@ final class SparseFederatedMlpModelSupport
 			double[][] biases = new double[layerCount][];
 			Random random = new Random(seed);
 			int previousSize = safeInputSize;
-			for (int layer = 0; layer < layerCount; layer++)
-			{
-				int currentSize = layer == layerCount - 1
-						? safeOutputSize : safeHiddenSize;
-				weights[layer] = new double[previousSize][currentSize];
-				biases[layer] = new double[currentSize];
-				double limit = Math.sqrt(6.0 / (previousSize + currentSize));
-				for (int source = 0; source < previousSize; source++)
+				for (int layer = 0; layer < layerCount; layer++)
 				{
-					for (int target = 0; target < currentSize; target++)
+					int currentSize = layer == layerCount - 1
+							? safeOutputSize : safeHiddenSize;
+					weights[layer] = new double[previousSize][currentSize];
+					biases[layer] = new double[currentSize];
+					double limit = initializationLimit(
+							previousSize,
+							currentSize,
+							layer < layerCount - 1,
+							safeHiddenLayerCount);
+					for (int source = 0; source < previousSize; source++)
 					{
-						weights[layer][source][target] =
-								(random.nextDouble() * 2.0 - 1.0) * limit;
+						for (int target = 0; target < currentSize; target++)
+						{
+							weights[layer][source][target] =
+									(random.nextDouble() * 2.0 - 1.0) * limit;
+						}
 					}
+					previousSize = currentSize;
 				}
-				previousSize = currentSize;
-			}
 			return new SparseMlpModel(
 					safeInputSize,
 					safeHiddenLayerCount,
@@ -143,7 +343,7 @@ final class SparseFederatedMlpModelSupport
 						"Sparse MLP training requires at least one example.");
 			}
 			int safeEpochs = Math.max(1, epochs);
-			double safeLearningRate = Math.max(0.0000001, learningRate);
+			double safeLearningRate = effectiveLearningRate(learningRate);
 			double safeL2 = Math.max(0.0, l2);
 			double safeFedProxMu = Math.max(0.0, fedProxMu);
 			double[][][] referenceWeights = deepCopy(weights);
@@ -185,13 +385,88 @@ final class SparseFederatedMlpModelSupport
 			return hiddenLayerCount;
 		}
 
-		int getWeightLayerCount()
+		double effectiveLearningRate(double requestedLearningRate)
 		{
-			return weights.length;
+			return effectiveLearningRate(hiddenLayerCount, requestedLearningRate);
 		}
 
-		void save(File file) throws IOException
+		boolean usesDeepStableMode()
 		{
+			return usesDeepStableMode(hiddenLayerCount);
+		}
+
+		String trainingModeLabel()
+		{
+			return trainingModeLabel(hiddenLayerCount);
+		}
+
+		String hiddenActivationLabel()
+		{
+			return hiddenActivationLabel(hiddenLayerCount);
+		}
+
+		String initializationLabel()
+		{
+			return initializationLabel(hiddenLayerCount);
+		}
+
+		static boolean usesDeepStableMode(int hiddenLayerCount)
+		{
+			return hiddenLayerCount >= DEEP_STABLE_LAYER_THRESHOLD;
+		}
+
+		static double effectiveLearningRate(
+				int hiddenLayerCount,
+				double requestedLearningRate)
+		{
+			double safeLearningRate = Math.max(0.0000001, requestedLearningRate);
+			if (usesDeepStableMode(hiddenLayerCount))
+			{
+				return Math.min(safeLearningRate, DEEP_STABLE_MAX_LEARNING_RATE);
+			}
+			return safeLearningRate;
+		}
+
+		static String trainingModeLabel(int hiddenLayerCount)
+		{
+			return usesDeepStableMode(hiddenLayerCount)
+					? "deep-stable" : "standard-tanh";
+		}
+
+		static String hiddenActivationLabel(int hiddenLayerCount)
+		{
+			return usesDeepStableMode(hiddenLayerCount)
+					? "leakyReLU(" + DEEP_STABLE_LEAKY_RELU_SLOPE + ")"
+					: "tanh";
+		}
+
+		static String initializationLabel(int hiddenLayerCount)
+		{
+			return usesDeepStableMode(hiddenLayerCount)
+					? "heUniformFanIn"
+					: "xavierUniform";
+		}
+
+			int getWeightLayerCount()
+			{
+				return weights.length;
+			}
+
+			SparseMlpModel copy()
+			{
+				SparseMlpModel copy = new SparseMlpModel(
+						inputSize,
+						hiddenLayerCount,
+						hiddenSize,
+						outputSize,
+						deepCopy(weights),
+						copyBiases(biases));
+				copy.sampleCount = sampleCount;
+				return copy;
+			}
+
+			void save(File file) throws IOException
+			{
 			File parent = file.getParentFile();
 			if (parent != null && !parent.exists())
 			{
@@ -321,14 +596,15 @@ final class SparseFederatedMlpModelSupport
 						sum += entry.getValue() * weights[0][source][target];
 					}
 				}
-				activations[0][target] = Math.tanh(sum);
+				activations[0][target] = hiddenActivation(sum);
 			}
 			for (int layer = 1; layer < weights.length - 1; layer++)
 			{
-				activations[layer] = denseTanh(
+				activations[layer] = denseHidden(
 						activations[layer - 1],
 						weights[layer],
-						biases[layer]);
+						biases[layer],
+						usesDeepStableMode());
 			}
 			int outputLayer = weights.length - 1;
 			activations[outputLayer] = softmax(
@@ -358,9 +634,8 @@ final class SparseFederatedMlpModelSupport
 						downstream += weights[layer + 1][source][target]
 								* deltas[layer + 1][target];
 					}
-					double activation = activations[layer][source];
 					deltas[layer][source] = downstream
-							* (1.0 - activation * activation);
+							* hiddenDerivativeFromActivation(activations[layer][source]);
 				}
 			}
 			return deltas;
@@ -427,6 +702,24 @@ final class SparseFederatedMlpModelSupport
 						"Sparse MLP model shapes are not compatible.");
 			}
 		}
+
+		private double hiddenActivation(double value)
+		{
+			if (usesDeepStableMode())
+			{
+				return value >= 0.0 ? value : DEEP_STABLE_LEAKY_RELU_SLOPE * value;
+			}
+			return Math.tanh(value);
+		}
+
+		private double hiddenDerivativeFromActivation(double activation)
+		{
+			if (usesDeepStableMode())
+			{
+				return activation >= 0.0 ? 1.0 : DEEP_STABLE_LEAKY_RELU_SLOPE;
+			}
+			return 1.0 - activation * activation;
+		}
 	}
 
 	static void saveAveragedModel(List<String> modelPaths, String outputPath)
@@ -439,6 +732,66 @@ final class SparseFederatedMlpModelSupport
 			models.add(SparseMlpModel.load(new File(modelPath)));
 		}
 		SparseMlpModel.average(models).save(new File(outputPath));
+	}
+
+	static AggregatedEvaluationResult aggregateEvaluationResults(
+			List<EvaluationResult> results,
+			int outputCount)
+	{
+		Map<String,Prediction> uniquePredictions =
+				new LinkedHashMap<String,Prediction>();
+		int duplicateInstances = 0;
+		if (results != null)
+		{
+			for (EvaluationResult result : results)
+			{
+				if (result == null || result.getPredictions() == null)
+				{
+					continue;
+				}
+				for (Prediction prediction : result.getPredictions())
+				{
+					if (prediction == null || prediction.getUser() == null)
+					{
+						continue;
+					}
+					if (uniquePredictions.containsKey(prediction.getUser()))
+					{
+						duplicateInstances++;
+						continue;
+					}
+					uniquePredictions.put(prediction.getUser(), prediction);
+				}
+			}
+		}
+
+		int safeOutputCount = Math.max(1, outputCount);
+		int correctCount = 0;
+		int[] predictedCounts = new int[safeOutputCount];
+		int[] actualCounts = new int[safeOutputCount];
+		for (Prediction prediction : uniquePredictions.values())
+		{
+			if (prediction.isCorrect())
+			{
+				correctCount++;
+			}
+			int predicted = prediction.getPredictedIndex();
+			if (predicted >= 0 && predicted < predictedCounts.length)
+			{
+				predictedCounts[predicted]++;
+			}
+			int actual = prediction.getActualIndex();
+			if (actual >= 0 && actual < actualCounts.length)
+			{
+				actualCounts[actual]++;
+			}
+		}
+		return new AggregatedEvaluationResult(
+				correctCount,
+				uniquePredictions.size(),
+				duplicateInstances,
+				predictedCounts,
+				actualCounts);
 	}
 
 	private static double[] denseLinear(
@@ -458,15 +811,41 @@ final class SparseFederatedMlpModelSupport
 		return output;
 	}
 
-	private static double[] denseTanh(
+	private static double initializationLimit(
+			int fanIn,
+			int fanOut,
+			boolean hiddenLayer,
+			int hiddenLayerCount)
+	{
+		if (hiddenLayer
+				&& hiddenLayerCount >= SparseMlpModel.DEEP_STABLE_LAYER_THRESHOLD)
+		{
+			double slope = SparseMlpModel.DEEP_STABLE_LEAKY_RELU_SLOPE;
+			return Math.sqrt(6.0 / ((1.0 + slope * slope) * Math.max(1, fanIn)));
+		}
+		return Math.sqrt(6.0 / (Math.max(1, fanIn) + Math.max(1, fanOut)));
+	}
+
+	private static double[] denseHidden(
 			double[] input,
 			double[][] layerWeights,
-			double[] layerBiases)
+			double[] layerBiases,
+			boolean deepStableActivation)
 	{
 		double[] linear = denseLinear(input, layerWeights, layerBiases);
 		for (int index = 0; index < linear.length; index++)
 		{
-			linear[index] = Math.tanh(linear[index]);
+			if (deepStableActivation)
+			{
+				linear[index] = linear[index] >= 0.0
+						? linear[index]
+						: SparseMlpModel.DEEP_STABLE_LEAKY_RELU_SLOPE
+								* linear[index];
+			}
+			else
+			{
+				linear[index] = Math.tanh(linear[index]);
+			}
 		}
 		return linear;
 	}

@@ -270,6 +270,7 @@ public class ControllerAgent extends GuiAgent {
 	private LinkedHashMap<String,Double> aggregatedUserTweets = new LinkedHashMap<String,Double>();
 	private int totalDocuments = 0;
 	private Map<String,LinkedHashMap<String,Double>> allUserDocumentsTFIDF;
+	private LinkedHashMap<String,Double> centralIdfByTerm = new LinkedHashMap<String,Double>();
 	private List<String> datasetFollowees; //followees in the whole dataset for MLP distributed
 	
 	protected void setup() {
@@ -1459,14 +1460,19 @@ public class ControllerAgent extends GuiAgent {
 				
 				int[] bins = new int[numRecAgents]; //bins for recommender agents
 
-				int currentTweetCount;
-				int totalRecBin = 0; //Number of tweets in a recommender agent's bin
-				int smallestBinIndex = 0;
+					int currentTweetCount;
+					int totalRecBin = 0; //Number of tweets in a recommender agent's bin
+					int smallestBinIndex = 0;
 
-				totalUsers = 0;
-				ArrayList<Integer> recServers;
-				
-				for (String user : listOfUsers)
+					totalUsers = 0;
+					ArrayList<Integer> recServers;
+					Map<String,Integer> mlpRecServerByUser = Collections.emptyMap();
+					if (algorithmRec == MLP && numRecAgents > 1)
+					{
+						mlpRecServerByUser = assignMlpUsersToBalancedServers(numRecAgents, availableDb);
+					}
+
+					for (String user : listOfUsers)
 				{
 					totalUsers++;
 
@@ -1487,37 +1493,46 @@ public class ControllerAgent extends GuiAgent {
 					{
 						System.out.println("Controller ENTERD HERE else condition: "+user);
 						currentTweetCount = availableDb.getTweetCountFromUser(user);
-						smallestBinIndex = findSmallestBin(bins);
-	//					totalRecBin = bins.get(smallestBinIndex);
-						totalRecBin = bins[smallestBinIndex];
-						totalRecBin += currentTweetCount;
-	//					bins.set(smallestBinIndex, totalRecBin);
-						bins[smallestBinIndex] = totalRecBin;
-						smallestBinIndex++; //add 1 to index to make index start from 1 instead of 0
-
-						//Add list of recommender servers and increase bins accordingly if distributed
-						//ie. add the tweet count to all recommenders if there are 2 for the user looking for recommendation
-						// K-means Euclidean was added by Sepide 
-						if (usersRec.contains(user) || ((algorithmRec == K_MEANS || algorithmRec == MLP || algorithmRec == K_MEANSEUCLIDEAN || algorithmRec == Doc2Vec || algorithmRec == SVM) && numRecAgents > 1 && datasetFollowees.contains(user)))
-						{	
-							for (int i = 0; i < numRecAgents; i++)
-							{
-								if (smallestBinIndex-1 != i)
-								{
-	//								totalRecBin = bins.get(i);
-									totalRecBin = bins[i];
-									totalRecBin += currentTweetCount;
-	//								bins.set(i,totalRecBin);
-									bins[i] = totalRecBin;
-								}
-								recServers.add(i+1);
-							}
+						if (algorithmRec == MLP && numRecAgents > 1 && !usersRec.contains(user)
+								&& mlpRecServerByUser.containsKey(user))
+						{
+							smallestBinIndex = mlpRecServerByUser.get(user);
+							bins[smallestBinIndex - 1] += currentTweetCount;
+							recServers.add(smallestBinIndex);
 						}
 						else
 						{
-							recServers.add(smallestBinIndex);
-						}	
-						
+							smallestBinIndex = findSmallestBin(bins);
+	//						totalRecBin = bins.get(smallestBinIndex);
+							totalRecBin = bins[smallestBinIndex];
+							totalRecBin += currentTweetCount;
+	//						bins.set(smallestBinIndex, totalRecBin);
+							bins[smallestBinIndex] = totalRecBin;
+							smallestBinIndex++; //add 1 to index to make index start from 1 instead of 0
+
+							//Add list of recommender servers and increase bins accordingly if distributed
+							//ie. add the tweet count to all recommenders if there are 2 for the user looking for recommendation
+							// K-means Euclidean was added by Sepide
+							if (usersRec.contains(user) || (((algorithmRec == K_MEANS || algorithmRec == K_MEANSEUCLIDEAN || algorithmRec == Doc2Vec || algorithmRec == SVM) && numRecAgents > 1 && datasetFollowees.contains(user))))
+							{
+								for (int i = 0; i < numRecAgents; i++)
+								{
+									if (smallestBinIndex-1 != i)
+									{
+	//									totalRecBin = bins.get(i);
+										totalRecBin = bins[i];
+										totalRecBin += currentTweetCount;
+	//									bins.set(i,totalRecBin);
+										bins[i] = totalRecBin;
+									}
+									recServers.add(i+1);
+								}
+							}
+							else
+							{
+								recServers.add(smallestBinIndex);
+							}
+						}
 					}
 					
 					System.out.println("Controller recServers: "+user+" "+recServers+" smallestBinIndex: "+smallestBinIndex);
@@ -1612,11 +1627,11 @@ public class ControllerAgent extends GuiAgent {
 					myGui.updateList(listOfUsers); //update before creating recommender agents
 				
 				int j =0;
-				for(int i=1; i<numRecAgents+1; i++)
-				{
+					for(int i=1; i<numRecAgents+1; i++)
+					{
 
-					Object[] recAgentArgs = new Object[24];
-					recAgentArgs[0] = getAID();										
+						Object[] recAgentArgs = new Object[25];
+						recAgentArgs[0] = getAID();
 					recAgentArgs[1] = referenceUser;								
 
 					recAgentArgs[3] = beginDate;
@@ -1645,13 +1660,14 @@ public class ControllerAgent extends GuiAgent {
 						recAgentArgs[19] = trainedSVM;
 						
 					}
-					
+
 					// if (algorithmRec == MLP && numRecAgents > 1)
 					if (algorithmRec == MLP)
 					{
 						recAgentArgs[20] = allUniqueDocTerms;
 						recAgentArgs[22] = trainSetUsers;
 						recAgentArgs[23] = testSetUsers;
+						recAgentArgs[24] = centralIdfByTerm;
 					}
 					recAgentArgs[21] = datasetFollowees;
 					
@@ -2080,7 +2096,7 @@ public class ControllerAgent extends GuiAgent {
 //	}
 
 	//Finds the smallest bin to fill in when using distributed system
-//	public int findSmallestBin(ArrayList<Integer> numbers) { 
+	//	public int findSmallestBin(ArrayList<Integer> numbers) {
 	public int findSmallestBin(int[] currentBins) {
 		int smallestIndex = 0;
 //		int smallest = numbers.get(0);
@@ -2096,10 +2112,52 @@ public class ControllerAgent extends GuiAgent {
 				smallest = currentBins[i]; 
 				smallestIndex = i;
 			} 
-		} 
+		}
 		return smallestIndex;
 	}
-	
+
+	private Map<String,Integer> assignMlpUsersToBalancedServers(int nodeCount, InMemoryDb db)
+	{
+		Map<String,Integer> assignedServers = new LinkedHashMap<String,Integer>();
+		if (nodeCount <= 0 || db == null)
+		{
+			return assignedServers;
+		}
+		int[] assignedTweetBins = new int[nodeCount];
+		Map<String,List<String>> usersByFollowee = new LinkedHashMap<String,List<String>>();
+		for (String userName : listOfUsers)
+		{
+			String followee = userFollowee == null ? null : userFollowee.get(userName);
+			if (followee == null)
+			{
+				followee = "";
+			}
+			List<String> usersForFollowee = usersByFollowee.get(followee);
+			if (usersForFollowee == null)
+			{
+				usersForFollowee = new ArrayList<String>();
+				usersByFollowee.put(followee, usersForFollowee);
+			}
+			usersForFollowee.add(userName);
+		}
+		for (List<String> usersForFollowee : usersByFollowee.values())
+		{
+			for (String userName : usersForFollowee)
+			{
+				if (usersRec.contains(userName))
+				{
+					continue;
+				}
+				int targetIndex = findSmallestBin(assignedTweetBins);
+				assignedServers.put(userName, Integer.valueOf(targetIndex + 1));
+				assignedTweetBins[targetIndex] += db.getTweetCountFromUser(userName);
+			}
+		}
+		System.out.println(getLocalName()+" MLP class-balanced routing assigned "
+				+assignedServers.size()+" users across "+nodeCount+" recommender nodes.");
+		return assignedServers;
+	}
+
 	public void generateUserNames()
 	{
 		int totalUsers = numFollowees + numFollowers;
@@ -2633,9 +2691,18 @@ public class ControllerAgent extends GuiAgent {
 
 
 		} //end for (Long currTweetId : tweetIdText.keySet())
-	
+
 	}
-	
+
+	private double calculateLog2Idf(double documentCount, double documentFrequency)
+	{
+		if (documentCount <= 0.0 || documentFrequency <= 0.0)
+		{
+			return 0.0;
+		}
+		return Math.log(documentCount / documentFrequency) / Math.log(2.0);
+	}
+
 	public List<String> findListFollowees()
 	{
 		List<String> listFolloweeNames = new ArrayList<String>();
@@ -2652,7 +2719,15 @@ public class ControllerAgent extends GuiAgent {
 	public void processTweets(int retweetsFlag, int hashTagsFlag, int stopWordsFlag)
 	{
 		ArrayList<Long> tweetIdsToRemove = new ArrayList<Long>(); //tweetIdsToRemove because no useful info
-		
+		tweetIdDocumentVector.clear();
+		allUniqueDocTerms.clear();
+		allTermsDocumentFreq.clear();
+		allUserDocuments.clear();
+		followeeFollowerCounts.clear();
+		followeeFollowers.clear();
+		centralIdfByTerm.clear();
+		allUserDocumentsTFIDF = null;
+
 		System.out.println("Controller Processing Tweets");
 		int tweetIdCount = 0;
 		
@@ -2876,25 +2951,30 @@ public class ControllerAgent extends GuiAgent {
 			allTermsDocumentFreq.put(term, 0);
 		}
 		
-		for (String curName : allUserDocuments.keySet())
-		{
-			LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
-			for (String docTerm : curDoc.keySet())
+			totalDocuments = allUserDocuments.size();
+			for (String curName : allUserDocuments.keySet())
 			{
-				docFreq = allTermsDocumentFreq.get(docTerm);
-				docFreq++;
-				allTermsDocumentFreq.put(docTerm,docFreq);
+				LinkedHashMap<String,Double> curDoc = allUserDocuments.get(curName);
+				for (String docTerm : curDoc.keySet())
+				{
+					docFreq = allTermsDocumentFreq.get(docTerm);
+					docFreq++;
+					allTermsDocumentFreq.put(docTerm,docFreq);
+				}
 			}
-		}
-		
-		//Calculate tfidf
-		double tf,df,idf,tfidf;
-		allUserDocumentsTFIDF = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
-		LinkedHashMap<String,LinkedHashMap<String,Double>> allUserDocumentsTF = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
-		ArrayList<LinkedHashMap<String,Double>> userDocumentsTFIDFList = new ArrayList<LinkedHashMap<String,Double>>();
-		ArrayList<LinkedHashMap<String,Double>> userDocumentsTFList = new ArrayList<LinkedHashMap<String,Double>>();
-		totalDocuments = allUserDocuments.size();
-		System.out.println(getLocalName()+" Calculating TF-IDF");		
+			for (String term : allUniqueDocTerms)
+			{
+				Integer dfValue = allTermsDocumentFreq.get(term);
+				centralIdfByTerm.put(term, calculateLog2Idf(totalDocuments, dfValue == null ? 0 : dfValue.intValue()));
+			}
+
+			//Calculate tfidf
+			double tf,df,idf,tfidf;
+			allUserDocumentsTFIDF = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
+			LinkedHashMap<String,LinkedHashMap<String,Double>> allUserDocumentsTF = new LinkedHashMap<String,LinkedHashMap<String,Double>>();
+			ArrayList<LinkedHashMap<String,Double>> userDocumentsTFIDFList = new ArrayList<LinkedHashMap<String,Double>>();
+			ArrayList<LinkedHashMap<String,Double>> userDocumentsTFList = new ArrayList<LinkedHashMap<String,Double>>();
+			System.out.println(getLocalName()+" Calculating TF-IDF");
 
 		double vectorMagnitude=0.0;
 		double vectorMagnitudeTF=0.0;
@@ -2912,7 +2992,7 @@ public class ControllerAgent extends GuiAgent {
 			{
 				tf=userDoc.get(docTerm); //tf raw frequency
 				df=allTermsDocumentFreq.get(docTerm);
-				idf=(double)Math.log10(totalDocuments/df) / Math.log10(2); //log base 2
+				idf=calculateLog2Idf(totalDocuments, df); //log base 2
 				tfidf=tf*idf;
 				userDocumentTFIDF.put(docTerm, tfidf);
 				userDocumentTF.put(docTerm, tf);
@@ -2957,69 +3037,47 @@ public class ControllerAgent extends GuiAgent {
 	public void determineTrainingTestSet()
 	{
 		int numUsers = allUserDocuments.keySet().size();
-		int numTestUsers = (int) Math.floor(numUsers * TEST_SET_PERCENT);
-		int numTrainUsers = numUsers - numTestUsers;
-		int currTestUsers = 0;
-		int currTrainUsers = 0;
 		testSetUsers = new ArrayList<String>(); //list of users in test set
 		trainSetUsers = new ArrayList<String>(); //list of users in training set
-		List<String> currFollowers; //list of followers for the current followee
-		Map<String,List<String>> tempFolloweeFollowers = new LinkedHashMap<String,List<String>>();
-		tempFolloweeFollowers.putAll(followeeFollowers);
-		
+
 		System.out.println("Entered determineTrainingTestSet");
-		System.out.println("numTestUsers: "+numTestUsers+" numTrainUsers: "+numTrainUsers);
-		
-		int countTestUser = 0;
-		//loop through each followee for 1 follower at a time until numTestUsers is reached
-		while (currTestUsers < numTestUsers)
+		for (String followeeName: followeeFollowers.keySet())
 		{
-			for (String followeeName: tempFolloweeFollowers.keySet())
+			List<String> currFollowers = followeeFollowers.get(followeeName);
+			if (currFollowers == null || currFollowers.isEmpty())
 			{
-				System.out.println("countTestUser: "+countTestUser);
-				currFollowers = tempFolloweeFollowers.get(followeeName);
-				// if a followee set runs out of followers before another
-				if (currFollowers.size() > 0)
-				{
-					testSetUsers.add(currFollowers.remove(0));
-					currTestUsers++;
-					countTestUser++;
-				}
-				
-				tempFolloweeFollowers.put(followeeName,currFollowers);
-				
-				if (currTestUsers == numTestUsers)
-					break;
+				continue;
 			}
+			int testCount = (int)Math.floor(currFollowers.size() * TEST_SET_PERCENT);
+			if (currFollowers.size() > 1)
+			{
+				testCount = Math.max(1, Math.min(testCount, currFollowers.size() - 1));
+			}
+			else
+			{
+				testCount = 0;
+			}
+			for (int i = 0; i < currFollowers.size(); i++)
+			{
+				if (i < testCount)
+				{
+					testSetUsers.add(currFollowers.get(i));
+				}
+				else
+				{
+					trainSetUsers.add(currFollowers.get(i));
+				}
+			}
+			System.out.println("Stratified split "+followeeName
+					+": train="+Math.max(0, currFollowers.size() - testCount)
+					+" test="+testCount);
 		}
-		
+		System.out.println("numTestUsers: "+testSetUsers.size()
+				+" numTrainUsers: "+trainSetUsers.size()
+				+" totalUsers: "+numUsers);
 		System.out.println("Determined Test Set");
-		
-		int countTrainUser = 0;
-		while (currTrainUsers < numTrainUsers)
-		{
-			
-			for (String followeeName: tempFolloweeFollowers.keySet())
-			{
-				System.out.println("countTrainUser: "+countTrainUser);
-				currFollowers = tempFolloweeFollowers.get(followeeName);
-				//if a followee set runs out of followers before another
-				if (currFollowers.size() > 0)
-				{
-					trainSetUsers.add(currFollowers.remove(0));
-					currTrainUsers++;
-					countTrainUser++;
-				}
-				
-				tempFolloweeFollowers.put(followeeName,currFollowers);
-				
-				if (currTrainUsers == numTrainUsers)
-					break;
-			}
-		}
-		
 		System.out.println("Determined Training Set");
-		
+
 	}
 	
 	public void createTrainingFile(String pathTrainSet)

@@ -35,6 +35,7 @@ final class MlpSettingsDialog extends JDialog
     private final JSpinner learningRate;
     private final JSpinner maxError;
     private final JSpinner sparseEpochs;
+    private final JSpinner fedAvgRounds;
     private final JSpinner sparseL2;
     private final JSpinner fedProxMu;
     private AlgorithmParameterSettings result;
@@ -57,6 +58,7 @@ final class MlpSettingsDialog extends JDialog
         learningRate = new JSpinner(new SpinnerNumberModel(settings.getMlpLearningRate(), 0.0001, 1.0, 0.01));
         maxError = new JSpinner(new SpinnerNumberModel(settings.getMlpMaxError(), 0.000001, 1.0, 0.001));
         sparseEpochs = new JSpinner(new SpinnerNumberModel(settings.getMlpSparseEpochs(), 1, 500, 1));
+        fedAvgRounds = new JSpinner(new SpinnerNumberModel(settings.getMlpFedAvgRounds(), 1, 100, 1));
         sparseL2 = new JSpinner(new SpinnerNumberModel(settings.getMlpSparseL2(), 0.0, 1.0, 0.0001));
         fedProxMu = new JSpinner(new SpinnerNumberModel(settings.getMlpFedProxMu(), 0.0, 10.0, 0.01));
         engineBox.addActionListener(new ActionListener() {
@@ -87,9 +89,11 @@ final class MlpSettingsDialog extends JDialog
         JTextArea text = new JTextArea(
                 "Default keeps the original v2.5 Neuroph behavior: one hidden layer, "
                 + "10 hidden neurons, learning rate 0.1, max error 0.01.\n"
-                + "Sparse Federated MLP is opt-in and experimental for large sparse TF-IDF data. "
-                + "Sparse uses hidden layers, hidden neurons, learning rate, epochs, L2, and FedProx; "
-                + "its default is 80 shuffled epochs, and max error is Legacy-only.");
+                + "Sparse Federated MLP is opt-in for large sparse TF-IDF data. "
+                + "Sparse uses hidden layers, hidden neurons, learning rate, epochs, FedAvg rounds, L2, and FedProx; "
+                + "its default is 80 shuffled epochs over 16 FedAvg rounds, and max error is Legacy-only. "
+                + "Sparse configurations with 4 or more hidden layers use depth-stable leaky-ReLU training "
+                + "and cap the effective learning rate at 0.03.");
         text.setEditable(false);
         text.setOpaque(true);
         text.setBackground(new Color(245, 248, 252));
@@ -116,8 +120,9 @@ final class MlpSettingsDialog extends JDialog
         addRow(form, c, 4, "Learning rate", learningRate);
         addRow(form, c, 5, "Max error", maxError);
         addRow(form, c, 6, "Sparse epochs", sparseEpochs);
-        addRow(form, c, 7, "Sparse L2", sparseL2);
-        addRow(form, c, 8, "Sparse FedProx mu", fedProxMu);
+        addRow(form, c, 7, "Sparse FedAvg rounds", fedAvgRounds);
+        addRow(form, c, 8, "Sparse L2", sparseL2);
+        addRow(form, c, 9, "Sparse FedProx mu", fedProxMu);
         return form;
     }
 
@@ -163,6 +168,7 @@ final class MlpSettingsDialog extends JDialog
         learningRate.setValue(Double.valueOf(settings.getMlpLearningRate()));
         maxError.setValue(Double.valueOf(settings.getMlpMaxError()));
         sparseEpochs.setValue(Integer.valueOf(settings.getMlpSparseEpochs()));
+        fedAvgRounds.setValue(Integer.valueOf(settings.getMlpFedAvgRounds()));
         sparseL2.setValue(Double.valueOf(settings.getMlpSparseL2()));
         fedProxMu.setValue(Double.valueOf(settings.getMlpFedProxMu()));
         refreshEngineFields();
@@ -173,13 +179,17 @@ final class MlpSettingsDialog extends JDialog
         boolean sparse = engineBox.getSelectedIndex() == 1;
         maxError.setEnabled(!sparse);
         sparseEpochs.setEnabled(sparse);
+        fedAvgRounds.setEnabled(sparse);
         sparseL2.setEnabled(sparse);
         fedProxMu.setEnabled(sparse);
         maxError.setToolTipText(sparse
                 ? "Max error is used by Legacy Neuroph MLP. Sparse Federated MLP uses Sparse epochs instead."
                 : "Legacy Neuroph MLP stopping error.");
         sparseEpochs.setToolTipText(sparse
-                ? "Number of Sparse Federated MLP training epochs."
+                ? "Total number of local Sparse Federated MLP training epochs distributed across FedAvg rounds."
+                : "Only used by Sparse Federated MLP.");
+        fedAvgRounds.setToolTipText(sparse
+                ? "Number of iterative FedAvg synchronization rounds. Total local epochs are split across these rounds."
                 : "Only used by Sparse Federated MLP.");
         sparseL2.setToolTipText(sparse
                 ? "L2 regularization used by Sparse Federated MLP."
@@ -201,6 +211,7 @@ final class MlpSettingsDialog extends JDialog
         settings.setMlpLearningRate(((Number)learningRate.getValue()).doubleValue());
         settings.setMlpMaxError(((Number)maxError.getValue()).doubleValue());
         settings.setMlpSparseEpochs(((Number)sparseEpochs.getValue()).intValue());
+        settings.setMlpFedAvgRounds(((Number)fedAvgRounds.getValue()).intValue());
         settings.setMlpSparseL2(((Number)sparseL2.getValue()).doubleValue());
         settings.setMlpFedProxMu(((Number)fedProxMu.getValue()).doubleValue());
         settings.setCustomMlpEnabled(customEnabled.isSelected() || differsFromDefaults(settings));
@@ -226,6 +237,7 @@ final class MlpSettingsDialog extends JDialog
                 || Double.compare(defaults.getMlpLearningRate(), settings.getMlpLearningRate()) != 0
                 || Double.compare(defaults.getMlpMaxError(), settings.getMlpMaxError()) != 0
                 || defaults.getMlpSparseEpochs() != settings.getMlpSparseEpochs()
+                || defaults.getMlpFedAvgRounds() != settings.getMlpFedAvgRounds()
                 || Double.compare(defaults.getMlpSparseL2(), settings.getMlpSparseL2()) != 0
                 || Double.compare(defaults.getMlpFedProxMu(), settings.getMlpFedProxMu()) != 0;
     }

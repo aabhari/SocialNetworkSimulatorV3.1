@@ -14,8 +14,10 @@ public final class SparseFederatedMlpModelSupportSelfTest
 	public static void main(String[] args)
 	{
 		usesRequestedHiddenLayerDepth();
+		deepStableModeStartsAtFourHiddenLayers();
 		differentDepthsProduceDifferentPredictions();
 		separableTenClassDataDoesNotCollapse();
+		deDuplicatedEvaluationAggregationCountsEachUserOnce();
 		System.out.println("SparseFederatedMlpModelSupportSelfTest passed");
 	}
 
@@ -41,6 +43,42 @@ public final class SparseFederatedMlpModelSupportSelfTest
 			throw new AssertionError("expected " + expectedWeightMatrices
 					+ " weight matrices but got " + model.getWeightLayerCount());
 		}
+	}
+
+	private static void deepStableModeStartsAtFourHiddenLayers()
+	{
+		SparseFederatedMlpModelSupport.SparseMlpModel shallow =
+				SparseFederatedMlpModelSupport.SparseMlpModel.create(
+						6, 3, 5, 3, 123L);
+		SparseFederatedMlpModelSupport.SparseMlpModel deep =
+				SparseFederatedMlpModelSupport.SparseMlpModel.create(
+						6, 4, 5, 3, 123L);
+		if (shallow.usesDeepStableMode())
+		{
+			throw new AssertionError("3 hidden layers should keep standard tanh mode");
+		}
+		if (!"standard-tanh".equals(shallow.trainingModeLabel())
+				|| !"tanh".equals(shallow.hiddenActivationLabel())
+				|| !"xavierUniform".equals(shallow.initializationLabel()))
+		{
+			throw new AssertionError("unexpected shallow sparse MLP mode metadata");
+		}
+		assertClose(0.1, shallow.effectiveLearningRate(0.1),
+				"shallow learning rate");
+		if (!deep.usesDeepStableMode())
+		{
+			throw new AssertionError("4 hidden layers should use deep-stable mode");
+		}
+		if (!"deep-stable".equals(deep.trainingModeLabel())
+				|| !deep.hiddenActivationLabel().startsWith("leakyReLU")
+				|| !"heUniformFanIn".equals(deep.initializationLabel()))
+		{
+			throw new AssertionError("unexpected deep sparse MLP mode metadata");
+		}
+		assertClose(0.03, deep.effectiveLearningRate(0.1),
+				"deep capped learning rate");
+		assertClose(0.02, deep.effectiveLearningRate(0.02),
+				"deep already-safe learning rate");
 	}
 
 	private static void differentDepthsProduceDifferentPredictions()
@@ -121,6 +159,40 @@ public final class SparseFederatedMlpModelSupportSelfTest
 		return rows;
 	}
 
+	private static void deDuplicatedEvaluationAggregationCountsEachUserOnce()
+	{
+		List<SparseFederatedMlpModelSupport.EvaluationResult> results =
+				new ArrayList<SparseFederatedMlpModelSupport.EvaluationResult>();
+		List<SparseFederatedMlpModelSupport.Prediction> nodeOne =
+				new ArrayList<SparseFederatedMlpModelSupport.Prediction>();
+		nodeOne.add(new SparseFederatedMlpModelSupport.Prediction("u1", 0, 0));
+		nodeOne.add(new SparseFederatedMlpModelSupport.Prediction("u2", 1, 0));
+		List<SparseFederatedMlpModelSupport.Prediction> nodeTwo =
+				new ArrayList<SparseFederatedMlpModelSupport.Prediction>();
+		nodeTwo.add(new SparseFederatedMlpModelSupport.Prediction("u1", 0, 0));
+		nodeTwo.add(new SparseFederatedMlpModelSupport.Prediction("u3", 1, 1));
+		results.add(new SparseFederatedMlpModelSupport.EvaluationResult("n1", nodeOne));
+		results.add(new SparseFederatedMlpModelSupport.EvaluationResult("n2", nodeTwo));
+
+		SparseFederatedMlpModelSupport.AggregatedEvaluationResult aggregated =
+				SparseFederatedMlpModelSupport.aggregateEvaluationResults(results, 2);
+		if (aggregated.getTotalInstances() != 3)
+		{
+			throw new AssertionError("expected 3 de-duplicated users but got "
+					+ aggregated.getTotalInstances());
+		}
+		if (aggregated.getCorrectCount() != 2)
+		{
+			throw new AssertionError("expected 2 correct predictions but got "
+					+ aggregated.getCorrectCount());
+		}
+		if (aggregated.getDuplicateInstances() != 1)
+		{
+			throw new AssertionError("expected 1 duplicate prediction but got "
+					+ aggregated.getDuplicateInstances());
+		}
+	}
+
 	private static List<SparseFederatedMlpModelSupport.TrainingExample> tenClassExamples()
 	{
 		List<SparseFederatedMlpModelSupport.TrainingExample> rows =
@@ -159,5 +231,14 @@ public final class SparseFederatedMlpModelSupportSelfTest
 			}
 		}
 		return maxIndex;
+	}
+
+	private static void assertClose(double expected, double actual, String label)
+	{
+		if (Math.abs(expected - actual) > 0.0000001)
+		{
+			throw new AssertionError(label + " expected " + expected
+					+ " but got " + actual);
+		}
 	}
 }

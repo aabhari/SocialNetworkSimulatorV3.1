@@ -123,6 +123,9 @@ public class OrganizingAgent extends Agent
 	private int averageWeightCount;
 	private List<String> sparseMlpModelPaths;
 	private int sparseAverageWeightCount;
+	private Map<Integer,List<String>> sparseMlpFedAvgRoundModelPaths;
+	private List<SparseFederatedMlpModelSupport.EvaluationResult> sparseMlpEvaluationResults;
+	private int sparseMlpEvaluationCount;
 
 	protected void setup() 
 	{
@@ -142,10 +145,13 @@ public class OrganizingAgent extends Agent
 		{
 			listMLP = new ArrayList<MultiLayerPerceptron>();
 			listNN = new ArrayList<NeuralNetwork>();
-			averageWeightCount = 0;
-			sparseMlpModelPaths = new ArrayList<String>();
-			sparseAverageWeightCount = 0;
-		}
+				averageWeightCount = 0;
+				sparseMlpModelPaths = new ArrayList<String>();
+				sparseAverageWeightCount = 0;
+				sparseMlpFedAvgRoundModelPaths = new LinkedHashMap<Integer,List<String>>();
+				sparseMlpEvaluationResults = new ArrayList<SparseFederatedMlpModelSupport.EvaluationResult>();
+				sparseMlpEvaluationCount = 0;
+			}
 			
 
 		recMergeCount = 0;
@@ -202,7 +208,148 @@ public class OrganizingAgent extends Agent
 		InitializeBehaviour initialBehaviour = new InitializeBehaviour(this);
 		addBehaviour(initialBehaviour);
 		
-		setQueueSize(0);
+			setQueueSize(0);
+		}
+
+	private void handleSparseMlpFedAvgUpdate(ACLMessage msg)
+	{
+		try
+		{
+			SparseFederatedMlpModelSupport.FedAvgModelUpdate update =
+					(SparseFederatedMlpModelSupport.FedAvgModelUpdate)msg.getContentObject();
+			if (sparseMlpFedAvgRoundModelPaths == null)
+			{
+				sparseMlpFedAvgRoundModelPaths = new LinkedHashMap<Integer,List<String>>();
+			}
+			Integer roundKey = Integer.valueOf(update.getRound());
+			List<String> roundPaths = sparseMlpFedAvgRoundModelPaths.get(roundKey);
+			if (roundPaths == null)
+			{
+				roundPaths = new ArrayList<String>();
+				sparseMlpFedAvgRoundModelPaths.put(roundKey, roundPaths);
+			}
+			roundPaths.add(update.getModelPath());
+			System.out.println(getLocalName()+" received Sparse MLP FedAvg round "
+					+update.getRound()+"/"+update.getTotalRounds()+" update "
+					+roundPaths.size()+"/"+allRecAgents.length);
+			if (roundPaths.size() == allRecAgents.length)
+			{
+				String nnDirName = "Stored_NN/";
+				File nnDir = new File(nnDirName);
+				if (!nnDir.exists())
+				{
+					nnDir.mkdirs();
+				}
+				String averagedSparseFileName = nnDirName+"averaged_sparse_MLP_round"
+						+update.getRound()+".ser";
+				SparseFederatedMlpModelSupport.saveAveragedModel(roundPaths, averagedSparseFileName);
+				ACLMessage averagedMsg = new ACLMessage(ACLMessage.INFORM);
+				for(int i=0; i<allRecAgents.length; i++)
+				{
+					averagedMsg.addReceiver(allRecAgents[i]);
+				}
+				if (update.getRound() < update.getTotalRounds())
+				{
+					averagedMsg.setOntology(SparseFederatedMlpModelSupport.FEDAVG_ROUND_COMPLETE_ONTOLOGY);
+					averagedMsg.setContentObject(new SparseFederatedMlpModelSupport.FedAvgRoundModel(
+							averagedSparseFileName,
+							update.getRound(),
+							update.getTotalRounds()));
+				}
+				else
+				{
+					averagedMsg.setOntology(SparseFederatedMlpModelSupport.FEDAVG_COMPLETE_ONTOLOGY);
+					averagedMsg.setContent(averagedSparseFileName);
+				}
+				send(averagedMsg);
+				sparseMlpFedAvgRoundModelPaths.remove(roundKey);
+			}
+		}
+		catch (Exception ex)
+		{
+			ex.printStackTrace();
+			sendSparseMlpFailure(SparseFederatedMlpModelSupport.FEDAVG_FAILED_ONTOLOGY, ex);
+		}
+	}
+
+	private void handleSparseMlpEvaluationUpdate(ACLMessage msg)
+	{
+		try
+		{
+			SparseFederatedMlpModelSupport.EvaluationResult result =
+					(SparseFederatedMlpModelSupport.EvaluationResult)msg.getContentObject();
+			if (sparseMlpEvaluationResults == null)
+			{
+				sparseMlpEvaluationResults = new ArrayList<SparseFederatedMlpModelSupport.EvaluationResult>();
+			}
+			sparseMlpEvaluationResults.add(result);
+			sparseMlpEvaluationCount++;
+			System.out.println(getLocalName()+" received Sparse MLP evaluation from "
+					+result.getSourceAgent()+" "+sparseMlpEvaluationCount+"/"+allRecAgents.length);
+			if (sparseMlpEvaluationCount == allRecAgents.length)
+			{
+				SparseFederatedMlpModelSupport.AggregatedEvaluationResult aggregated =
+						SparseFederatedMlpModelSupport.aggregateEvaluationResults(
+								sparseMlpEvaluationResults,
+								inferSparseMlpOutputCount(sparseMlpEvaluationResults));
+				ACLMessage evaluationComplete = new ACLMessage(ACLMessage.INFORM);
+				for(int i=0; i<allRecAgents.length; i++)
+				{
+					evaluationComplete.addReceiver(allRecAgents[i]);
+				}
+				evaluationComplete.setOntology(SparseFederatedMlpModelSupport.EVALUATION_COMPLETE_ONTOLOGY);
+				evaluationComplete.setContentObject(aggregated);
+				send(evaluationComplete);
+				sparseMlpEvaluationResults.clear();
+				sparseMlpEvaluationCount = 0;
+			}
+		}
+		catch (Exception ex)
+		{
+			ex.printStackTrace();
+			sendSparseMlpFailure(SparseFederatedMlpModelSupport.EVALUATION_FAILED_ONTOLOGY, ex);
+		}
+	}
+
+	private int inferSparseMlpOutputCount(
+			List<SparseFederatedMlpModelSupport.EvaluationResult> results)
+	{
+		int maxIndex = 0;
+		if (results != null)
+		{
+			for (SparseFederatedMlpModelSupport.EvaluationResult result : results)
+			{
+				if (result == null || result.getPredictions() == null)
+				{
+					continue;
+				}
+				for (SparseFederatedMlpModelSupport.Prediction prediction : result.getPredictions())
+				{
+					if (prediction == null)
+					{
+						continue;
+					}
+					maxIndex = Math.max(maxIndex, prediction.getActualIndex());
+					maxIndex = Math.max(maxIndex, prediction.getPredictedIndex());
+				}
+			}
+		}
+		return Math.max(1, maxIndex + 1);
+	}
+
+	private void sendSparseMlpFailure(String ontology, Exception ex)
+	{
+		ACLMessage failedMsg = new ACLMessage(ACLMessage.INFORM);
+		if (allRecAgents != null)
+		{
+			for(int i=0; i<allRecAgents.length; i++)
+			{
+				failedMsg.addReceiver(allRecAgents[i]);
+			}
+		}
+		failedMsg.setOntology(ontology);
+		failedMsg.setContent(ex.getClass().getSimpleName()+": "+ex.getMessage());
+		send(failedMsg);
 	}
 
 	private class InitializeBehaviour extends CyclicBehaviour {
@@ -504,9 +651,19 @@ public class OrganizingAgent extends Agent
 			}
 			
 
-			if (msg != null && "Average Sparse MLP".equals(msg.getOntology()))
-			{
-				sparseAverageWeightCount++;
+				if (msg != null && SparseFederatedMlpModelSupport.FEDAVG_UPDATE_ONTOLOGY.equals(msg.getOntology()))
+				{
+					handleSparseMlpFedAvgUpdate(msg);
+				}
+
+				if (msg != null && SparseFederatedMlpModelSupport.EVALUATION_UPDATE_ONTOLOGY.equals(msg.getOntology()))
+				{
+					handleSparseMlpEvaluationUpdate(msg);
+				}
+
+				if (msg != null && "Average Sparse MLP".equals(msg.getOntology()))
+				{
+					sparseAverageWeightCount++;
 				if (sparseMlpModelPaths == null)
 				{
 					sparseMlpModelPaths = new ArrayList<String>();

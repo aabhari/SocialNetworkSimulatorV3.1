@@ -22,6 +22,7 @@ final class AlgorithmParameterSettings implements Serializable
     private double mlpLearningRate;
     private double mlpMaxError;
     private int mlpSparseEpochs;
+    private int mlpFedAvgRounds;
     private double mlpSparseL2;
     private double mlpFedProxMu;
 
@@ -61,6 +62,8 @@ final class AlgorithmParameterSettings implements Serializable
                 "dsmp.mlp.maxError", settings.mlpMaxError);
         settings.mlpSparseEpochs = intProperty(
                 "dsmp.mlp.sparseEpochs", settings.mlpSparseEpochs);
+        settings.mlpFedAvgRounds = intProperty(
+                "dsmp.mlp.fedAvgRounds", settings.mlpFedAvgRounds);
         settings.mlpSparseL2 = doubleProperty(
                 "dsmp.mlp.sparseL2", settings.mlpSparseL2);
         settings.mlpFedProxMu = doubleProperty(
@@ -79,6 +82,7 @@ final class AlgorithmParameterSettings implements Serializable
         copy.mlpLearningRate = mlpLearningRate;
         copy.mlpMaxError = mlpMaxError;
         copy.mlpSparseEpochs = mlpSparseEpochs;
+        copy.mlpFedAvgRounds = mlpFedAvgRounds;
         copy.mlpSparseL2 = mlpSparseL2;
         copy.mlpFedProxMu = mlpFedProxMu;
         return copy;
@@ -93,6 +97,7 @@ final class AlgorithmParameterSettings implements Serializable
         mlpLearningRate = 0.1;
         mlpMaxError = 0.01;
         mlpSparseEpochs = 80;
+        mlpFedAvgRounds = 16;
         mlpSparseL2 = 0.0001;
         mlpFedProxMu = 0.0;
     }
@@ -124,6 +129,10 @@ final class AlgorithmParameterSettings implements Serializable
         {
             throw new IllegalArgumentException("Sparse epochs must be between 1 and 500.");
         }
+        if (mlpFedAvgRounds < 1 || mlpFedAvgRounds > 100)
+        {
+            throw new IllegalArgumentException("FedAvg rounds must be between 1 and 100.");
+        }
         if (mlpSparseL2 < 0.0 || mlpSparseL2 > 1.0)
         {
             throw new IllegalArgumentException("Sparse L2 must be between 0 and 1.");
@@ -148,6 +157,8 @@ final class AlgorithmParameterSettings implements Serializable
     void setMlpMaxError(double value) { mlpMaxError = value; }
     int getMlpSparseEpochs() { return mlpSparseEpochs; }
     void setMlpSparseEpochs(int value) { mlpSparseEpochs = value; }
+    int getMlpFedAvgRounds() { return mlpFedAvgRounds; }
+    void setMlpFedAvgRounds(int value) { mlpFedAvgRounds = value; }
     double getMlpSparseL2() { return mlpSparseL2; }
     void setMlpSparseL2(double value) { mlpSparseL2 = value; }
     double getMlpFedProxMu() { return mlpFedProxMu; }
@@ -177,11 +188,18 @@ final class AlgorithmParameterSettings implements Serializable
         AlgorithmParameterSettings effective = effective(this);
         if (MLP_ENGINE_SPARSE_FEDERATED.equals(effective.getMlpEngine()))
         {
+            String trainingMode = SparseFederatedMlpModelSupport.SparseMlpModel
+                    .trainingModeLabel(effective.mlpHiddenLayers);
+            double effectiveLearningRate = SparseFederatedMlpModelSupport.SparseMlpModel
+                    .effectiveLearningRate(effective.mlpHiddenLayers, effective.mlpLearningRate);
             return effective.getMlpEngineLabel()
                     + ", " + effective.mlpHiddenLayers + " hidden layer(s)"
                     + ", " + effective.mlpHiddenNeurons + " neuron(s)/layer"
+                    + ", " + trainingMode
                     + ", rate " + effective.mlpLearningRate
+                    + ", effective rate " + effectiveLearningRate
                     + ", epochs " + effective.mlpSparseEpochs
+                    + ", rounds " + effective.mlpFedAvgRounds
                     + ", L2 " + effective.mlpSparseL2
                     + ", FedProx " + effective.mlpFedProxMu;
         }
