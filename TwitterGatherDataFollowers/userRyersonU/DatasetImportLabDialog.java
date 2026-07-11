@@ -3,6 +3,8 @@ package TwitterGatherDataFollowers.userRyersonU;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -16,8 +18,14 @@ import java.awt.event.ActionListener;
 import java.io.File;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -60,6 +68,14 @@ final class DatasetImportLabDialog extends JDialog {
 	private static final Font LABEL_FONT = new Font("Arial", Font.BOLD, 12);
 	private static final Font TITLE_FONT = new Font("Arial", Font.BOLD, 20);
 	private static final Font BUTTON_FONT = new Font("Arial", Font.BOLD, 12);
+	private static final int WORKFLOW_MIN_WIDTH = 340;
+	private static final int WORKFLOW_PREF_WIDTH = 380;
+	private static final int INSPECTION_MIN_WIDTH = 360;
+	private static final int INSPECTION_PREF_WIDTH = 560;
+	private static final int REPORT_MIN_WIDTH = 360;
+	private static final int REPORT_PREF_WIDTH = 420;
+	private static final int PANEL_PREF_HEIGHT = 680;
+	private static final int SPLIT_DIVIDER_SIZE = 8;
 
 	private final ControllerAgentGui owner;
 
@@ -93,6 +109,13 @@ final class DatasetImportLabDialog extends JDialog {
 	private JCheckBox stableFolloweeCheck;
 	private JTextField minTokensField;
 	private JTextField fallbackDateField;
+	private JComboBox<UciRetailDatasetImporter.DatasetBalanceMode> balanceModeCombo;
+	private JComboBox<UciRetailDatasetImporter.DatasetBalanceTargetPolicy> balanceTargetPolicyCombo;
+	private JTextField balanceTargetField;
+	private JTextField balanceSeedField;
+	private JTextArea balanceGuide;
+	private boolean balancePolicyUserSelected;
+	private boolean suppressBalancePolicyEvents;
 
 	private JButton inspectButton;
 	private JButton buildButton;
@@ -126,6 +149,10 @@ final class DatasetImportLabDialog extends JDialog {
 	private DefaultTableModel columnTableModel;
 	private DefaultTableModel outputPreviewModel;
 	private DefaultTableModel livePreviewModel;
+	private DefaultTableModel imbalanceModel;
+	private JTextArea imbalanceSummary;
+	private JLabel imbalanceStatusBadge;
+	private JButton refreshImbalanceButton;
 	private JTextArea livePreviewNote;
 	private final JLabel[] liveMappingLabels = new JLabel[6];
 	private boolean suppressLivePreview;
@@ -136,6 +163,9 @@ final class DatasetImportLabDialog extends JDialog {
 	private File selectedFile;
 	private UciRetailDatasetImporter.SourceProfile sourceProfile;
 	private UciRetailDatasetImporter.ImportReport lastReport;
+	private UciRetailDatasetImporter.ImportReport lastBalanceDiagnosis;
+	private SwingWorker<UciRetailDatasetImporter.ImportReport, Void> imbalanceWorker;
+	private int imbalanceRequestId;
 
 	DatasetImportLabDialog(ControllerAgentGui owner) {
 		super(owner, "Dataset Import Lab", false);
@@ -154,13 +184,26 @@ final class DatasetImportLabDialog extends JDialog {
 		root.setBorder(new EmptyBorder(8, 8, 8, 8));
 		root.add(createHeader(), BorderLayout.NORTH);
 
-		JSplitPane middle = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, createInspectionPanel(), createReportPanel());
-		middle.setResizeWeight(0.66);
-		middle.setDividerSize(8);
+		JPanel workflowPanel = createWorkflowPanel();
+		JPanel inspectionPanel = createInspectionPanel();
+		JPanel reportPanel = createReportPanel();
 
-		JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, createWorkflowPanel(), middle);
-		main.setResizeWeight(0.33);
-		main.setDividerSize(8);
+		JSplitPane middle = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, inspectionPanel, reportPanel);
+		middle.setContinuousLayout(true);
+		middle.setResizeWeight(1.0);
+		middle.setDividerSize(SPLIT_DIVIDER_SIZE);
+		middle.setBorder(null);
+		sizePanel(middle,
+				INSPECTION_MIN_WIDTH + REPORT_MIN_WIDTH + SPLIT_DIVIDER_SIZE,
+				INSPECTION_PREF_WIDTH + REPORT_PREF_WIDTH + SPLIT_DIVIDER_SIZE);
+		installRightPinnedDivider(middle, REPORT_MIN_WIDTH, REPORT_PREF_WIDTH, 0.36d);
+
+		JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, workflowPanel, middle);
+		main.setContinuousLayout(true);
+		main.setResizeWeight(0.0);
+		main.setDividerSize(SPLIT_DIVIDER_SIZE);
+		main.setBorder(null);
+		installLeftPinnedDivider(main, WORKFLOW_MIN_WIDTH, WORKFLOW_PREF_WIDTH, 0.25d);
 		root.add(main, BorderLayout.CENTER);
 		root.add(createFooter(), BorderLayout.SOUTH);
 		return root;
@@ -198,12 +241,14 @@ final class DatasetImportLabDialog extends JDialog {
 		customMappingPanel = createCustomMappingPanel();
 		workflow.add(customMappingPanel);
 		workflow.add(Box.createVerticalStrut(8));
+		workflow.add(createBalancePanel());
+		workflow.add(Box.createVerticalStrut(8));
 		workflow.add(createValidationPanel());
 		workflow.add(Box.createVerticalStrut(8));
 		workflow.add(createActionPanel());
 
 		JScrollPane scroll = new JScrollPane(workflow);
-		scroll.setPreferredSize(new Dimension(430, 680));
+		sizePanel(scroll, WORKFLOW_MIN_WIDTH, WORKFLOW_PREF_WIDTH);
 		scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 		scroll.getVerticalScrollBar().setUnitIncrement(18);
 		scroll.setBorder(oldTitle("Import Workflow"));
@@ -211,6 +256,7 @@ final class DatasetImportLabDialog extends JDialog {
 
 		JPanel shell = oldPanel(new BorderLayout());
 		shell.add(scroll, BorderLayout.CENTER);
+		sizePanel(shell, WORKFLOW_MIN_WIDTH, WORKFLOW_PREF_WIDTH);
 		return shell;
 	}
 
@@ -328,9 +374,62 @@ final class DatasetImportLabDialog extends JDialog {
 		return panel;
 	}
 
+
+	private JPanel createBalancePanel() {
+		JPanel panel = oldPanel(new BorderLayout(6, 6));
+		panel.setBorder(oldTitle("5. Class Balance"));
+
+		JPanel controls = oldPanel(new GridBagLayout());
+		GridBagConstraints gbc = formConstraints();
+		balanceModeCombo = new JComboBox<UciRetailDatasetImporter.DatasetBalanceMode>(
+				UciRetailDatasetImporter.DatasetBalanceMode.values());
+		balanceModeCombo.setFont(LABEL_FONT);
+		balanceModeCombo.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				applyRecommendedBalanceTargetPolicyIfUnpinned();
+				updateBalanceGuide();
+				markImbalanceStale();
+			}
+		});
+		addFormRow(controls, gbc, 0, "Balance mode:", balanceModeCombo);
+
+		balanceTargetPolicyCombo = new JComboBox<UciRetailDatasetImporter.DatasetBalanceTargetPolicy>(
+				new UciRetailDatasetImporter.DatasetBalanceTargetPolicy[] {
+						UciRetailDatasetImporter.DatasetBalanceTargetPolicy.PRESERVE_TOTAL_SIZE,
+						UciRetailDatasetImporter.DatasetBalanceTargetPolicy.CONSERVATIVE_CAP,
+						UciRetailDatasetImporter.DatasetBalanceTargetPolicy.STRICT_MINORITY,
+						UciRetailDatasetImporter.DatasetBalanceTargetPolicy.BOUNDED_AUGMENTATION,
+						UciRetailDatasetImporter.DatasetBalanceTargetPolicy.MANUAL
+				});
+		balanceTargetPolicyCombo.setFont(LABEL_FONT);
+		balanceTargetPolicyCombo.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				if (!suppressBalancePolicyEvents) {
+					balancePolicyUserSelected = true;
+				}
+				updateBalanceGuide();
+				markImbalanceStale();
+			}
+		});
+		addFormRow(controls, gbc, 1, "Target policy:", balanceTargetPolicyCombo);
+
+		balanceTargetField = textField("0");
+		balanceSeedField = textField("1");
+		addFormRow(controls, gbc, 2, "Manual target users/class:", balanceTargetField);
+		addFormRow(controls, gbc, 3, "Balance seed:", balanceSeedField);
+		panel.add(controls, BorderLayout.NORTH);
+
+		balanceGuide = textArea(7, 24);
+		balanceGuide.setBackground(WHITE);
+		balanceGuide.setForeground(INK);
+		panel.add(new JScrollPane(balanceGuide), BorderLayout.CENTER);
+		updateBalanceGuide();
+		return panel;
+	}
+
 	private JPanel createValidationPanel() {
 		JPanel panel = oldPanel(new GridBagLayout());
-		panel.setBorder(oldTitle("5. Validation and Output"));
+		panel.setBorder(oldTitle("6. Validation and Output"));
 		skipCancelledCheck = oldCheck("Skip cancelled invoices", true);
 		skipMissingCustomerCheck = oldCheck("Skip missing customer ids", true);
 		skipQuantityCheck = oldCheck("Skip non-positive quantities", true);
@@ -357,7 +456,7 @@ final class DatasetImportLabDialog extends JDialog {
 
 	private JPanel createActionPanel() {
 		JPanel panel = oldPanel(new GridLayout(3, 1, 0, 6));
-		panel.setBorder(oldTitle("6. Build and Use"));
+		panel.setBorder(oldTitle("7. Build and Use"));
 		buildButton = oldButton("Build DSMP Dataset");
 		buildButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent event) {
@@ -384,22 +483,67 @@ final class DatasetImportLabDialog extends JDialog {
 
 	private JPanel createInspectionPanel() {
 		JPanel panel = oldPanel(new BorderLayout(8, 8));
+		sizePanel(panel, INSPECTION_MIN_WIDTH, INSPECTION_PREF_WIDTH);
 		panel.setBorder(oldTitle("Inspection and Output Preview"));
 		panel.add(createMetricsPanel(), BorderLayout.NORTH);
 
 		JTabbedPane tabs = new JTabbedPane();
 		tabs.setFont(LABEL_FONT);
+		tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
 		previewModel = new DefaultTableModel();
-		tabs.addTab("Source Snapshot", new JScrollPane(styledTable(previewModel)));
+		tabs.addTab("Source Snapshot", tableScroll(styledTable(previewModel)));
 
 		columnTableModel = new DefaultTableModel(
 				new Object[] { "Column", "Non-empty", "Numeric", "Date-like", "Distinct", "Samples" }, 0);
-		tabs.addTab("Column Intelligence", new JScrollPane(styledTable(columnTableModel)));
+		tabs.addTab("Column Intelligence", tableScroll(styledTable(columnTableModel)));
 
 		outputPreviewModel = new DefaultTableModel(new Object[] {
 				"Followee", "Post id", "Date", "User id", "User name", "Text" }, 0);
-		tabs.addTab("DSMP Output Preview", new JScrollPane(styledTable(outputPreviewModel)));
+		tabs.addTab("DSMP Output Preview", tableScroll(styledTable(outputPreviewModel)));
+		tabs.addTab("Imbalance", createImbalancePanel());
 		panel.add(tabs, BorderLayout.CENTER);
+		return panel;
+	}
+
+
+	private JPanel createImbalancePanel() {
+		JPanel panel = oldPanel(new BorderLayout(6, 6));
+		JPanel top = oldPanel(new BorderLayout(6, 6));
+		JPanel titleBlock = oldPanel(new GridLayout(2, 1));
+		JLabel title = oldLabel("Class Imbalance Diagnosis");
+		title.setFont(new Font("Arial", Font.BOLD, 15));
+		titleBlock.add(title);
+		JLabel subtitle = oldLabel("Full-dataset followee distribution before build, then exact post-build balance reporting.");
+		subtitle.setFont(new Font("Arial", Font.PLAIN, 11));
+		titleBlock.add(subtitle);
+		top.add(titleBlock, BorderLayout.CENTER);
+
+		JPanel actions = oldPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+		imbalanceStatusBadge = oldLabel("WAITING");
+		imbalanceStatusBadge.setHorizontalAlignment(SwingConstants.CENTER);
+		imbalanceStatusBadge.setBorder(BorderFactory.createLineBorder(LINE));
+		imbalanceStatusBadge.setPreferredSize(new Dimension(90, 25));
+		actions.add(imbalanceStatusBadge);
+		refreshImbalanceButton = oldButton("Refresh Diagnosis");
+		refreshImbalanceButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				refreshImbalanceDiagnosis(true);
+			}
+		});
+		actions.add(refreshImbalanceButton);
+		top.add(actions, BorderLayout.EAST);
+		panel.add(top, BorderLayout.NORTH);
+
+		imbalanceModel = new DefaultTableModel(new Object[] {
+				"Followee", "Original users", "Original rows", "Final users", "User share", "Ratio", "Balance action" }, 0);
+		panel.add(tableScroll(styledTable(imbalanceModel)), BorderLayout.CENTER);
+
+		imbalanceSummary = textArea(6, 42);
+		imbalanceSummary.setBackground(WHITE);
+		imbalanceSummary.setForeground(INK);
+		imbalanceSummary.setText("Inspect a dataset to see class imbalance, balance impact, and warnings here.");
+		panel.add(new JScrollPane(imbalanceSummary), BorderLayout.SOUTH);
+		resetImbalancePanel("Inspect a dataset to see class imbalance, balance impact, and warnings here.");
 		return panel;
 	}
 
@@ -426,7 +570,7 @@ final class DatasetImportLabDialog extends JDialog {
 
 	private JPanel createReportPanel() {
 		JPanel panel = oldPanel(new BorderLayout(8, 8));
-		panel.setPreferredSize(new Dimension(420, 680));
+		sizePanel(panel, REPORT_MIN_WIDTH, REPORT_PREF_WIDTH);
 		panel.setBorder(oldTitle("Live Snapshot and Console"));
 		panel.add(createLivePreviewPanel(), BorderLayout.CENTER);
 		panel.add(createConsolePanel(), BorderLayout.SOUTH);
@@ -442,7 +586,7 @@ final class DatasetImportLabDialog extends JDialog {
 				"Followee", "Post id", "Date", "User id", "User name", "Text" }, 0);
 		JTable table = styledTable(livePreviewModel);
 		table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
-		panel.add(new JScrollPane(table), BorderLayout.CENTER);
+		panel.add(tableScroll(table), BorderLayout.CENTER);
 
 		livePreviewNote = textArea(3, 24);
 		livePreviewNote.setBackground(WHITE);
@@ -468,7 +612,8 @@ final class DatasetImportLabDialog extends JDialog {
 
 	private JPanel createConsolePanel() {
 		JPanel panel = oldPanel(new BorderLayout(5, 5));
-		panel.setPreferredSize(new Dimension(420, 230));
+		panel.setPreferredSize(new Dimension(REPORT_PREF_WIDTH, 230));
+		panel.setMinimumSize(new Dimension(REPORT_MIN_WIDTH, 180));
 		panel.setBorder(oldTitle("Import Console"));
 
 		JPanel stats = oldPanel(new GridLayout(2, 4, 5, 2));
@@ -529,6 +674,7 @@ final class DatasetImportLabDialog extends JDialog {
 		selectedDatasetKind = kind;
 		sourceProfile = null;
 		lastReport = null;
+		lastBalanceDiagnosis = null;
 		clearTables();
 		if (buildButton != null) {
 			buildButton.setEnabled(false);
@@ -693,6 +839,7 @@ final class DatasetImportLabDialog extends JDialog {
 		outputNameField.setText(safeBase(selectedFile.getName()) + "_DSMP");
 		sourceProfile = null;
 		lastReport = null;
+		lastBalanceDiagnosis = null;
 		clearTables();
 		setStatus("READY", "Dataset selected. Inspect it before building.", 0);
 		updateConsoleStats("READY", "-", "Selected");
@@ -784,6 +931,14 @@ final class DatasetImportLabDialog extends JDialog {
 		updateConsoleStats("BUILDING", "-", "Writing");
 		log("BUILD START"
 				+ "\nProfile: " + options.profile
+				+ "\nBalance mode: " + options.balanceMode
+				+ "\nTarget policy: " + options.balanceTargetPolicy
+				+ "\nManual target users/class: "
+				+ (options.balanceTargetPolicy
+						== UciRetailDatasetImporter.DatasetBalanceTargetPolicy.MANUAL
+								? Integer.toString(options.balanceTargetUsersPerClass)
+								: "not used")
+				+ "\nBalance seed: " + options.balanceSeed
 				+ "\nOutput folder: " + options.outputDirectory.getAbsolutePath()
 				+ "\nDataset name: " + options.outputBaseName
 				+ "\nMinimum text tokens: " + options.minimumTextTokens);
@@ -861,6 +1016,15 @@ final class DatasetImportLabDialog extends JDialog {
 		stableFolloweeCheck.setSelected(defaults.forceSingleFolloweePerUser);
 		minTokensField.setText(Integer.toString(defaults.minimumTextTokens));
 		fallbackDateField.setText(defaults.defaultDate);
+		balancePolicyUserSelected = false;
+		UciRetailDatasetImporter.DatasetBalanceMode initialBalanceMode =
+				defaults.balanceMode == UciRetailDatasetImporter.DatasetBalanceMode.OFF
+						? UciRetailDatasetImporter.DatasetBalanceMode.DIAGNOSE_ONLY
+						: defaults.balanceMode;
+		balanceModeCombo.setSelectedItem(initialBalanceMode);
+		setBalanceTargetPolicy(recommendedPolicyForMode(initialBalanceMode));
+		balanceTargetField.setText(Integer.toString(defaults.balanceTargetUsersPerClass));
+		balanceSeedField.setText(Long.toString(defaults.balanceSeed));
 		populateColumnCombos(sourceProfile, defaults);
 		updateDatasetKindUi();
 		updateProfileChoicesForKind(selectedDatasetKind, defaults.profile);
@@ -915,6 +1079,21 @@ final class DatasetImportLabDialog extends JDialog {
 		options.minimumTextTokens = parsePositiveInt(minTokensField.getText(), 1);
 		options.defaultDate = fallbackDateField.getText().trim().length() == 0
 				? "2011-01-01" : fallbackDateField.getText().trim();
+		Object balanceMode = balanceModeCombo.getSelectedItem();
+		options.balanceMode = balanceMode instanceof UciRetailDatasetImporter.DatasetBalanceMode
+				? (UciRetailDatasetImporter.DatasetBalanceMode) balanceMode
+				: UciRetailDatasetImporter.DatasetBalanceMode.OFF;
+		Object targetPolicy = balanceTargetPolicyCombo.getSelectedItem();
+		options.balanceTargetPolicy =
+				targetPolicy instanceof UciRetailDatasetImporter.DatasetBalanceTargetPolicy
+						? (UciRetailDatasetImporter.DatasetBalanceTargetPolicy) targetPolicy
+						: UciRetailDatasetImporter.recommendedTargetPolicyForMode(options.balanceMode);
+		options.balanceTargetUsersPerClass =
+				options.balanceTargetPolicy
+						== UciRetailDatasetImporter.DatasetBalanceTargetPolicy.MANUAL
+								? parseNonNegativeInt(balanceTargetField.getText(), 0)
+								: 0;
+		options.balanceSeed = parseLong(balanceSeedField.getText(), 1L);
 		options.outputDirectory = new File(outputDirField.getText().trim());
 		options.outputBaseName = outputNameField.getText().trim();
 
@@ -972,6 +1151,7 @@ final class DatasetImportLabDialog extends JDialog {
 			});
 		}
 		updateLivePreview();
+		refreshImbalanceDiagnosis(false);
 	}
 
 	private void renderReport(UciRetailDatasetImporter.ImportReport report) {
@@ -981,6 +1161,257 @@ final class DatasetImportLabDialog extends JDialog {
 		for (String[] row : report.outputPreview) {
 			outputPreviewModel.addRow(row);
 		}
+		renderImbalanceReport(report, true);
+	}
+
+
+	private void refreshImbalanceDiagnosis(final boolean userRequested) {
+		if (imbalanceModel == null) {
+			return;
+		}
+		if (sourceProfile == null) {
+			resetImbalancePanel("Inspect a dataset to see class imbalance, balance impact, and warnings here.");
+			return;
+		}
+		final UciRetailDatasetImporter.Options options;
+		try {
+			options = collectOptions();
+		} catch (Exception ex) {
+			setImbalanceStatus("WAITING", Color.ORANGE.darker());
+			imbalanceSummary.setText("Balance diagnosis is waiting for a valid mapping: " + rootMessage(ex));
+			return;
+		}
+		final int requestId = ++imbalanceRequestId;
+		if (imbalanceWorker != null && !imbalanceWorker.isDone()) {
+			imbalanceWorker.cancel(true);
+		}
+		setImbalanceStatus("SCANNING", WHITE);
+		refreshImbalanceButton.setEnabled(false);
+		if (userRequested || lastBalanceDiagnosis == null) {
+			imbalanceSummary.setText("Scanning the full accepted dataset with the current mapping and balance mode...");
+		}
+		imbalanceWorker = new SwingWorker<UciRetailDatasetImporter.ImportReport, Void>() {
+			protected UciRetailDatasetImporter.ImportReport doInBackground() throws Exception {
+				return UciRetailDatasetImporter.diagnoseBalance(sourceProfile, options, null);
+			}
+
+			protected void done() {
+				if (requestId != imbalanceRequestId) {
+					return;
+				}
+				refreshImbalanceButton.setEnabled(true);
+				try {
+					lastBalanceDiagnosis = get();
+					renderImbalanceReport(lastBalanceDiagnosis, false);
+				} catch (Exception ex) {
+					setImbalanceStatus("FAILED", Color.RED.darker());
+					imbalanceSummary.setText("Balance diagnosis failed: " + rootMessage(ex));
+				}
+			}
+		};
+		imbalanceWorker.execute();
+	}
+
+	private void renderImbalanceReport(UciRetailDatasetImporter.ImportReport report, boolean postBuild) {
+		if (imbalanceModel == null || report == null) {
+			return;
+		}
+		DecimalFormat fmt = new DecimalFormat("#,##0");
+		DecimalFormat ratioFmt = new DecimalFormat("#,##0.0");
+		imbalanceModel.setRowCount(0);
+		Set<String> labels = new LinkedHashSet<String>();
+		labels.addAll(report.originalFolloweeUserCounts.keySet());
+		labels.addAll(report.originalFolloweeRowCounts.keySet());
+		labels.addAll(report.finalFolloweeUserCounts.keySet());
+		labels.addAll(report.finalFolloweeCounts.keySet());
+		List<String> sortedLabels = new ArrayList<String>(labels);
+		Collections.sort(sortedLabels, new Comparator<String>() {
+			public int compare(String left, String right) {
+				long leftCount = mapLong(report.originalFolloweeUserCounts, left);
+				long rightCount = mapLong(report.originalFolloweeUserCounts, right);
+				int countCompare = Long.compare(rightCount, leftCount);
+				return countCompare != 0 ? countCompare : left.compareTo(right);
+			}
+		});
+
+		long originalTotal = sumLongMap(report.originalFolloweeUserCounts);
+		long finalTotal = sumLongMap(report.finalFolloweeUserCounts);
+		long minUsers = Long.MAX_VALUE;
+		long maxUsers = 0L;
+		for (int i = 0; i < sortedLabels.size(); i++) {
+			String label = sortedLabels.get(i);
+			long users = mapLong(report.originalFolloweeUserCounts, label);
+			if (users > 0L) {
+				minUsers = Math.min(minUsers, users);
+				maxUsers = Math.max(maxUsers, users);
+			}
+		}
+		if (minUsers == Long.MAX_VALUE) {
+			minUsers = 0L;
+		}
+
+		for (int i = 0; i < sortedLabels.size(); i++) {
+			String label = sortedLabels.get(i);
+			long originalUsers = mapLong(report.originalFolloweeUserCounts, label);
+			long originalRows = mapLong(report.originalFolloweeRowCounts, label);
+			long finalUsers = mapLong(report.finalFolloweeUserCounts, label);
+			String ratio = minUsers <= 0L || originalUsers <= 0L
+					? "-" : ratioFmt.format(originalUsers / (double) minUsers) + "x";
+			imbalanceModel.addRow(new Object[] {
+					label,
+					fmt.format(originalUsers),
+					fmt.format(originalRows),
+					fmt.format(finalUsers),
+					formatPercent(originalUsers, originalTotal),
+					ratio,
+					balanceAction(report, originalUsers, finalUsers)
+			});
+		}
+
+		if (sortedLabels.isEmpty()) {
+			imbalanceModel.addRow(new Object[] {
+					"No accepted followee labels", "-", "-", "-", "-", "-", "Check mapping and validation filters"
+			});
+		}
+
+		setImbalanceStatus(postBuild ? "BUILT" : "READY", WHITE);
+		StringBuilder sb = new StringBuilder();
+		sb.append(postBuild ? "POST-BUILD BALANCE REPORT" : "PRE-BUILD FULL-DATASET DIAGNOSIS");
+		sb.append("\nSelected mode: ").append(report.balanceMode);
+		if (report.effectiveBalanceMode != null && report.balanceMode != report.effectiveBalanceMode) {
+			sb.append(" | Effective mode: ").append(report.effectiveBalanceMode);
+		}
+		sb.append(" | Target policy: ").append(report.balanceTargetPolicy);
+		sb.append(" | Engine: ").append(report.balanceEngine);
+		sb.append(" | Seed: ").append(report.balanceSeed);
+		if (report.balanceTargetUsersPerClass > 0) {
+			sb.append(" | Target/class: ").append(fmt.format(report.balanceTargetUsersPerClass));
+		} else {
+			sb.append(" | Target/class: automatic or unchanged");
+		}
+		if (report.balanceTargetDescription != null && report.balanceTargetDescription.length() > 0) {
+			sb.append("\nTarget source: ").append(report.balanceTargetDescription);
+		}
+		sb.append("\nAccepted rows: ").append(fmt.format(report.acceptedRows));
+		sb.append(" | Original users: ").append(fmt.format(report.balanceOriginalUsers));
+		sb.append(" | Followee labels: ").append(fmt.format(report.originalFolloweeUserCounts.size()));
+		if (maxUsers > 0L && minUsers > 0L) {
+			sb.append("\nOriginal imbalance: largest class ").append(fmt.format(maxUsers));
+			sb.append(" users, smallest class ").append(fmt.format(minUsers));
+			sb.append(" users, ratio ").append(ratioFmt.format(maxUsers / (double) minUsers)).append("x.");
+		} else {
+			sb.append("\nOriginal imbalance: not enough accepted classes to compute a ratio.");
+		}
+		sb.append("\nSelected-mode result: ").append(fmt.format(finalTotal));
+		sb.append(" final user instances, ").append(fmt.format(report.balanceDroppedUsers));
+		sb.append(" dropped users, ").append(fmt.format(report.balanceSyntheticUsers));
+		sb.append(" synthetic users, ").append(fmt.format(report.balanceDroppedRows)).append(" dropped rows.");
+		sb.append("\nRecommendation: ").append(balanceRecommendation(report, maxUsers, minUsers));
+		for (int i = 0; i < report.warnings.size(); i++) {
+			sb.append("\nWarning: ").append(report.warnings.get(i));
+		}
+		imbalanceSummary.setText(sb.toString());
+	}
+
+	private void markImbalanceStale() {
+		if (sourceProfile == null || imbalanceSummary == null) {
+			return;
+		}
+		setImbalanceStatus("REFRESH", Color.ORANGE.darker());
+		if (lastBalanceDiagnosis == null && lastReport == null) {
+			imbalanceSummary.setText("Click Refresh Diagnosis to scan the full accepted dataset with the current mapping and balance mode.");
+		} else {
+			imbalanceSummary.setText("Mapping or balance settings changed. Click Refresh Diagnosis for updated pre-build imbalance numbers.");
+		}
+	}
+
+	private void resetImbalancePanel(String message) {
+		if (imbalanceModel != null) {
+			imbalanceModel.setRowCount(0);
+		}
+		if (imbalanceSummary != null) {
+			imbalanceSummary.setText(message);
+		}
+		setImbalanceStatus("WAITING", Color.ORANGE.darker());
+		lastBalanceDiagnosis = null;
+	}
+
+	private void setImbalanceStatus(String text, Color foreground) {
+		if (imbalanceStatusBadge == null) {
+			return;
+		}
+		imbalanceStatusBadge.setText(text);
+		imbalanceStatusBadge.setForeground(foreground);
+	}
+
+	private static long mapLong(Map<String, Long> values, String key) {
+		Long value = values.get(key);
+		return value == null ? 0L : value.longValue();
+	}
+
+	private static long sumLongMap(Map<String, Long> values) {
+		long total = 0L;
+		for (Long value : values.values()) {
+			if (value != null) {
+				total += value.longValue();
+			}
+		}
+		return total;
+	}
+
+	private static String formatPercent(long value, long total) {
+		if (total <= 0L) {
+			return "-";
+		}
+		return new DecimalFormat("0.0").format(value * 100.0d / total) + "%";
+	}
+
+	private static String balanceAction(UciRetailDatasetImporter.ImportReport report,
+			long originalUsers, long finalUsers) {
+		long change = finalUsers - originalUsers;
+		if (change > 0L) {
+			return "Augmented +" + change + " synthetic user instance" + (change == 1L ? "" : "s");
+		}
+		if (change < 0L) {
+			return "Downsampled " + (-change) + " original user" + (change == -1L ? "" : "s");
+		}
+		UciRetailDatasetImporter.DatasetBalanceMode effectiveMode =
+				report.effectiveBalanceMode == null ? report.balanceMode : report.effectiveBalanceMode;
+		if (report.balanceMode != effectiveMode
+				&& effectiveMode == UciRetailDatasetImporter.DatasetBalanceMode.DIAGNOSE_ONLY) {
+			return "Not applied - only one followee class";
+		}
+		if (effectiveMode == UciRetailDatasetImporter.DatasetBalanceMode.DIAGNOSE_ONLY) {
+			return "Diagnosed only - unchanged";
+		}
+		if (effectiveMode == UciRetailDatasetImporter.DatasetBalanceMode.OFF) {
+			return "Off - unchanged";
+		}
+		return "Kept unchanged by selected mode";
+	}
+
+	private static String balanceRecommendation(UciRetailDatasetImporter.ImportReport report,
+			long maxUsers, long minUsers) {
+		if (report.originalFolloweeUserCounts.size() <= 1) {
+			return "Only one followee class is present, so classifier balancing is not meaningful for this mapping.";
+		}
+		double ratio = minUsers <= 0L ? Double.POSITIVE_INFINITY : maxUsers / (double) minUsers;
+		if (ratio <= 1.5d) {
+			return "The class distribution is already fairly close; Off or Diagnose only is reasonable.";
+		}
+		UciRetailDatasetImporter.DatasetBalanceMode effectiveMode =
+				report.effectiveBalanceMode == null ? report.balanceMode : report.effectiveBalanceMode;
+		if (effectiveMode == UciRetailDatasetImporter.DatasetBalanceMode.OFF
+				|| effectiveMode == UciRetailDatasetImporter.DatasetBalanceMode.DIAGNOSE_ONLY) {
+			return "Use Weka supervised Resample with Preserve total size for a balanced exported artifact, or Conservative cap for a no-synthetic run.";
+		}
+		if (report.balanceSyntheticUsers > 0) {
+			return "Hybrid/Weka balancing is compensating for minority classes; report the synthetic-user count in the audit when presenting results.";
+		}
+		if (report.balanceDroppedUsers > 0) {
+			return "Majority classes are being capped; this is conservative and avoids synthetic data.";
+		}
+		return "The selected mode is valid; review the final-user column for any remaining large class gaps.";
 	}
 
 	private static String formatBuildReport(UciRetailDatasetImporter.ImportReport report) {
@@ -999,6 +1430,22 @@ final class DatasetImportLabDialog extends JDialog {
 		sb.append(" | Written rows: ").append(fmt.format(report.writtenRows));
 		sb.append("\nUnique users: ").append(fmt.format(report.uniqueUsers));
 		sb.append(" | Followee labels: ").append(fmt.format(report.uniqueFollowees));
+		sb.append("\nBalance mode: ").append(report.balanceMode);
+		if (report.effectiveBalanceMode != null && report.balanceMode != report.effectiveBalanceMode) {
+			sb.append(" | Effective mode: ").append(report.effectiveBalanceMode);
+		}
+		sb.append(" | Target policy: ").append(report.balanceTargetPolicy);
+		sb.append(" | Engine: ").append(report.balanceEngine);
+		sb.append("\nBalance users: original ").append(fmt.format(report.balanceOriginalUsers));
+		sb.append(", selected ").append(fmt.format(report.balanceSelectedOriginalUsers));
+		sb.append(", dropped ").append(fmt.format(report.balanceDroppedUsers));
+		sb.append(", synthetic ").append(fmt.format(report.balanceSyntheticUsers));
+		if (report.balanceTargetUsersPerClass > 0) {
+			sb.append(" | Target/class: ").append(fmt.format(report.balanceTargetUsersPerClass));
+		}
+		if (report.balanceTargetDescription != null && report.balanceTargetDescription.length() > 0) {
+			sb.append("\nTarget source: ").append(report.balanceTargetDescription);
+		}
 		sb.append("\nSkipped total: ").append(fmt.format(skipped));
 		sb.append(" (cancelled ").append(fmt.format(report.skippedCancelledInvoices));
 		sb.append(", missing user ").append(fmt.format(report.skippedMissingCustomer));
@@ -1019,6 +1466,7 @@ final class DatasetImportLabDialog extends JDialog {
 		final ActionListener listener = new ActionListener() {
 			public void actionPerformed(ActionEvent event) {
 				updateLivePreview();
+				markImbalanceStale();
 			}
 		};
 		JComboBox<?>[] combos = new JComboBox<?>[] {
@@ -1039,18 +1487,39 @@ final class DatasetImportLabDialog extends JDialog {
 		DocumentListener documentListener = new DocumentListener() {
 			public void insertUpdate(DocumentEvent event) {
 				updateLivePreview();
+				markImbalanceStale();
 			}
 
 			public void removeUpdate(DocumentEvent event) {
 				updateLivePreview();
+				markImbalanceStale();
 			}
 
 			public void changedUpdate(DocumentEvent event) {
 				updateLivePreview();
+				markImbalanceStale();
 			}
 		};
 		minTokensField.getDocument().addDocumentListener(documentListener);
 		fallbackDateField.getDocument().addDocumentListener(documentListener);
+		DocumentListener balanceDocumentListener = new DocumentListener() {
+			public void insertUpdate(DocumentEvent event) {
+				updateBalanceGuide();
+				markImbalanceStale();
+			}
+
+			public void removeUpdate(DocumentEvent event) {
+				updateBalanceGuide();
+				markImbalanceStale();
+			}
+
+			public void changedUpdate(DocumentEvent event) {
+				updateBalanceGuide();
+				markImbalanceStale();
+			}
+		};
+		balanceTargetField.getDocument().addDocumentListener(balanceDocumentListener);
+		balanceSeedField.getDocument().addDocumentListener(balanceDocumentListener);
 	}
 
 	private void updateLivePreview() {
@@ -1198,8 +1667,77 @@ final class DatasetImportLabDialog extends JDialog {
 			customMappingPanel.setVisible(profile == UciRetailDatasetImporter.MappingProfile.CUSTOM);
 		}
 		updateLivePreview();
+		markImbalanceStale();
 		revalidate();
 		repaint();
+	}
+
+	private void updateBalanceGuide() {
+		if (balanceGuide == null || balanceModeCombo == null || balanceTargetPolicyCombo == null) {
+			return;
+		}
+		UciRetailDatasetImporter.DatasetBalanceMode mode =
+				(UciRetailDatasetImporter.DatasetBalanceMode) balanceModeCombo.getSelectedItem();
+		if (mode == null) {
+			mode = UciRetailDatasetImporter.DatasetBalanceMode.OFF;
+		}
+		UciRetailDatasetImporter.DatasetBalanceTargetPolicy policy =
+				(UciRetailDatasetImporter.DatasetBalanceTargetPolicy) balanceTargetPolicyCombo.getSelectedItem();
+		if (policy == null) {
+			policy = recommendedPolicyForMode(mode);
+		}
+		boolean manual = policy == UciRetailDatasetImporter.DatasetBalanceTargetPolicy.MANUAL;
+		balanceTargetField.setEnabled(manual);
+		int target = parseNonNegativeInt(balanceTargetField.getText(), 0);
+		long seed = parseLong(balanceSeedField.getText(), 1L);
+		String targetText = manual
+				? (target <= 0 ? "waiting for a positive manual target" : target + " users per followee class")
+				: policy.description();
+		StringBuilder sb = new StringBuilder();
+		sb.append(mode.description());
+		sb.append("\n\nScope: after validation and stable followee selection, before writing the DSMP file.");
+		sb.append("\nTarget policy: ").append(policy).append(".");
+		sb.append("\nTarget meaning: ").append(targetText).append(".");
+		sb.append("\nSeed: ").append(seed).append(" for repeatable sampling.");
+		if (mode == UciRetailDatasetImporter.DatasetBalanceMode.DIAGNOSE_ONLY
+				|| mode == UciRetailDatasetImporter.DatasetBalanceMode.OFF) {
+			sb.append("\nRecommended workflow: diagnose first; use Weka supervised Resample with Preserve total size when you need a balanced exported artifact.");
+		} else if (mode == UciRetailDatasetImporter.DatasetBalanceMode.STRICT_USER_BALANCE
+				|| mode == UciRetailDatasetImporter.DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE) {
+			sb.append("\nStrict downsampling modes cap any target above the smallest class because they do not invent users.");
+		}
+		if (mode == UciRetailDatasetImporter.DatasetBalanceMode.HYBRID_CAP_AND_AUGMENT) {
+			sb.append("\nSynthetic users get deterministic DSMP user/post ids while keeping the original text.");
+		} else if (mode == UciRetailDatasetImporter.DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE
+				|| mode == UciRetailDatasetImporter.DatasetBalanceMode.WEKA_SUPERVISED_RESAMPLE) {
+			sb.append("\nWeka runs over one instance per DSMP user/class, then selected users are written as DSMP rows.");
+		}
+		balanceGuide.setText(sb.toString());
+	}
+
+	private void applyRecommendedBalanceTargetPolicyIfUnpinned() {
+		if (!balancePolicyUserSelected && balanceModeCombo != null && balanceTargetPolicyCombo != null) {
+			UciRetailDatasetImporter.DatasetBalanceMode mode =
+					(UciRetailDatasetImporter.DatasetBalanceMode) balanceModeCombo.getSelectedItem();
+			setBalanceTargetPolicy(recommendedPolicyForMode(mode));
+		}
+	}
+
+	private void setBalanceTargetPolicy(UciRetailDatasetImporter.DatasetBalanceTargetPolicy policy) {
+		if (balanceTargetPolicyCombo == null || policy == null) {
+			return;
+		}
+		suppressBalancePolicyEvents = true;
+		try {
+			balanceTargetPolicyCombo.setSelectedItem(policy);
+		} finally {
+			suppressBalancePolicyEvents = false;
+		}
+	}
+
+	private static UciRetailDatasetImporter.DatasetBalanceTargetPolicy recommendedPolicyForMode(
+			UciRetailDatasetImporter.DatasetBalanceMode mode) {
+		return UciRetailDatasetImporter.recommendedTargetPolicyForMode(mode);
 	}
 
 	private void setIdleState() {
@@ -1208,6 +1746,8 @@ final class DatasetImportLabDialog extends JDialog {
 		useOutputButton.setEnabled(false);
 		resetButton.setEnabled(true);
 		updateDatasetKindUi();
+		updateBalanceGuide();
+		resetImbalancePanel("Inspect a dataset to see class imbalance, balance impact, and warnings here.");
 		log("Ready.\nChoose Retail, Journal, Tweets, or Other, then inspect a source file before building DSMP output.");
 	}
 
@@ -1217,6 +1757,9 @@ final class DatasetImportLabDialog extends JDialog {
 		resetButton.setEnabled(!busy);
 		useOutputButton.setEnabled(!busy && lastReport != null
 				&& lastReport.outputFile != null && lastReport.outputFile.isFile());
+		if (refreshImbalanceButton != null) {
+			refreshImbalanceButton.setEnabled(!busy && sourceProfile != null);
+		}
 		setCursor(Cursor.getPredefinedCursor(busy ? Cursor.WAIT_CURSOR : Cursor.DEFAULT_CURSOR));
 	}
 
@@ -1298,6 +1841,7 @@ final class DatasetImportLabDialog extends JDialog {
 		if (livePreviewNote != null) {
 			livePreviewNote.setText("Inspect a source file to see the live DSMP shape.");
 		}
+		resetImbalancePanel("Inspect a dataset to see class imbalance, balance impact, and warnings here.");
 		updateLiveMappingSummary(null);
 		if (rowsValue != null) {
 			rowsValue.setText("-");
@@ -1337,6 +1881,23 @@ final class DatasetImportLabDialog extends JDialog {
 		try {
 			int parsed = Integer.parseInt(value.trim());
 			return parsed > 0 ? parsed : fallback;
+		} catch (Exception ex) {
+			return fallback;
+		}
+	}
+
+	private static int parseNonNegativeInt(String value, int fallback) {
+		try {
+			int parsed = Integer.parseInt(value.trim());
+			return parsed >= 0 ? parsed : fallback;
+		} catch (Exception ex) {
+			return fallback;
+		}
+	}
+
+	private static long parseLong(String value, long fallback) {
+		try {
+			return Long.parseLong(value.trim());
 		} catch (Exception ex) {
 			return fallback;
 		}
@@ -1382,6 +1943,90 @@ final class DatasetImportLabDialog extends JDialog {
 		panel.setOpaque(true);
 		panel.setBackground(DSMP_BLUE);
 		return panel;
+	}
+
+	private static void sizePanel(Component component, int minimumWidth, int preferredWidth) {
+		component.setMinimumSize(new Dimension(minimumWidth, 0));
+		component.setPreferredSize(new Dimension(preferredWidth, PANEL_PREF_HEIGHT));
+	}
+
+	private static void installLeftPinnedDivider(final JSplitPane split,
+			final int minimumLeftWidth, final int preferredLeftWidth, final double maximumShare) {
+		ComponentAdapter listener = new ComponentAdapter() {
+			public void componentResized(ComponentEvent event) {
+				positionLeftPinnedDivider(split, minimumLeftWidth, preferredLeftWidth, maximumShare);
+			}
+
+			public void componentShown(ComponentEvent event) {
+				positionLeftPinnedDivider(split, minimumLeftWidth, preferredLeftWidth, maximumShare);
+			}
+		};
+		split.addComponentListener(listener);
+		SwingUtilities.invokeLater(new Runnable() {
+			public void run() {
+				positionLeftPinnedDivider(split, minimumLeftWidth, preferredLeftWidth, maximumShare);
+			}
+		});
+	}
+
+	private static void installRightPinnedDivider(final JSplitPane split,
+			final int minimumRightWidth, final int preferredRightWidth, final double maximumShare) {
+		ComponentAdapter listener = new ComponentAdapter() {
+			public void componentResized(ComponentEvent event) {
+				positionRightPinnedDivider(split, minimumRightWidth, preferredRightWidth, maximumShare);
+			}
+
+			public void componentShown(ComponentEvent event) {
+				positionRightPinnedDivider(split, minimumRightWidth, preferredRightWidth, maximumShare);
+			}
+		};
+		split.addComponentListener(listener);
+		SwingUtilities.invokeLater(new Runnable() {
+			public void run() {
+				positionRightPinnedDivider(split, minimumRightWidth, preferredRightWidth, maximumShare);
+			}
+		});
+	}
+
+	private static void positionLeftPinnedDivider(JSplitPane split,
+			int minimumLeftWidth, int preferredLeftWidth, double maximumShare) {
+		int available = split.getWidth() - split.getDividerSize();
+		if (available <= 0) {
+			return;
+		}
+		int rightMinimum = split.getRightComponent().getMinimumSize().width;
+		int responsiveWidth = (int) Math.round(available * maximumShare);
+		int leftWidth = clamp(responsiveWidth, minimumLeftWidth, preferredLeftWidth);
+		if (available - leftWidth < rightMinimum) {
+			leftWidth = Math.max(0, available - rightMinimum);
+		}
+		split.setDividerLocation(clamp(leftWidth, 0, available));
+	}
+
+	private static void positionRightPinnedDivider(JSplitPane split,
+			int minimumRightWidth, int preferredRightWidth, double maximumShare) {
+		int available = split.getWidth() - split.getDividerSize();
+		if (available <= 0) {
+			return;
+		}
+		int leftMinimum = split.getLeftComponent().getMinimumSize().width;
+		int responsiveWidth = (int) Math.round(available * maximumShare);
+		int rightWidth = clamp(responsiveWidth, minimumRightWidth, preferredRightWidth);
+		if (available - rightWidth < leftMinimum) {
+			rightWidth = Math.max(0, available - leftMinimum);
+		}
+		split.setDividerLocation(clamp(available - rightWidth, 0, available));
+	}
+
+	private static int clamp(int value, int minimum, int maximum) {
+		return Math.max(minimum, Math.min(maximum, value));
+	}
+
+	private static JScrollPane tableScroll(JTable table) {
+		JScrollPane scroll = new JScrollPane(table);
+		scroll.setMinimumSize(new Dimension(160, 120));
+		scroll.setPreferredSize(new Dimension(360, 260));
+		return scroll;
 	}
 
 	private static Border oldTitle(String title) {

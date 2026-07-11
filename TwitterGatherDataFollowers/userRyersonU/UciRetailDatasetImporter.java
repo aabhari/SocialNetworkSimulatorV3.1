@@ -40,6 +40,14 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import weka.core.Attribute;
+import weka.core.DenseInstance;
+import weka.core.Instance;
+import weka.core.Instances;
+import weka.filters.Filter;
+import weka.filters.supervised.instance.Resample;
+import weka.filters.supervised.instance.SpreadSubsample;
+
 /**
  * Converts raw source files into the six-column text format consumed by the
  * existing DSMP simulator. This class intentionally stays outside all
@@ -49,6 +57,7 @@ final class UciRetailDatasetImporter {
     private static final int PREVIEW_LIMIT = 60;
     private static final int DISTINCT_LIMIT = 10000;
     private static final String DEFAULT_COLLECTION_FOLLOWEE = "OnlineRetail";
+    private static final int MAX_AUTO_SYNTHETIC_MULTIPLIER = 8;
 
     private UciRetailDatasetImporter() {
     }
@@ -141,6 +150,89 @@ final class UciRetailDatasetImporter {
         Delimiter(char value, String label) {
             this.value = value;
             this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    enum DatasetBalanceMode {
+        OFF(
+                "Off",
+                "Write every accepted DSMP row. This preserves the current importer behavior."),
+        DIAGNOSE_ONLY(
+                "Diagnose only",
+                "Report class imbalance without changing the exported dataset."),
+        CONSERVATIVE_MAJORITY_CAP(
+                "Conservative majority cap",
+                "Recommended: caps oversized followee classes by unique users without inventing new users."),
+        STRICT_USER_BALANCE(
+                "Strict user-level balance",
+                "Downsamples every followee class to the same unique-user count."),
+        HYBRID_CAP_AND_AUGMENT(
+                "Hybrid cap + augmentation",
+                "Caps oversized classes and clones minority users as synthetic DSMP users when needed."),
+        WEKA_SPREAD_SUBSAMPLE(
+                "Weka SpreadSubsample",
+                "Uses Weka's supervised SpreadSubsample filter over DSMP user/class instances."),
+        WEKA_SUPERVISED_RESAMPLE(
+                "Weka supervised Resample",
+                "Uses Weka's supervised Resample filter with uniform class bias over DSMP user/class instances.");
+
+        private final String label;
+        private final String description;
+
+        DatasetBalanceMode(String label, String description) {
+            this.label = label;
+            this.description = description;
+        }
+
+        String description() {
+            return description;
+        }
+
+        boolean changesOutput() {
+            return this != OFF && this != DIAGNOSE_ONLY;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    enum DatasetBalanceTargetPolicy {
+        MODE_RECOMMENDED(
+                "Auto: mode recommendation",
+                "Use the target policy recommended for the selected balancing mode."),
+        PRESERVE_TOTAL_SIZE(
+                "Auto: preserve total size",
+                "Use the average users per class. Best for Weka supervised Resample artifact exports because it balances while keeping the output size close to the accepted user count."),
+        CONSERVATIVE_CAP(
+                "Auto: conservative cap",
+                "Use the 75th percentile class size. This caps oversized classes while preserving minority classes and avoiding synthetic users."),
+        STRICT_MINORITY(
+                "Auto: strict minority",
+                "Use the smallest accepted class size. This is exact downsampling with no synthetic users."),
+        BOUNDED_AUGMENTATION(
+                "Auto: bounded augmentation",
+                "Use a minority-safe target bounded by the lower quartile, median, and an 8x minority growth guard."),
+        MANUAL(
+                "Manual target",
+                "Use the Manual target users/class field.");
+
+        private final String label;
+        private final String description;
+
+        DatasetBalanceTargetPolicy(String label, String description) {
+            this.label = label;
+            this.description = description;
+        }
+
+        String description() {
+            return description;
         }
 
         @Override
@@ -288,6 +380,11 @@ final class UciRetailDatasetImporter {
         boolean groupStockCodesByPrefix = true;
         int minimumTextTokens = 1;
         String defaultDate = "2011-01-01";
+        DatasetBalanceMode balanceMode = DatasetBalanceMode.OFF;
+        DatasetBalanceTargetPolicy balanceTargetPolicy =
+                DatasetBalanceTargetPolicy.MODE_RECOMMENDED;
+        long balanceSeed = 1L;
+        int balanceTargetUsersPerClass = 0;
 
         int invoiceColumn = -1;
         int stockCodeColumn = -1;
@@ -473,13 +570,36 @@ final class UciRetailDatasetImporter {
         int uniqueUsers;
         int uniqueFollowees;
         String datasetSha256;
+        DatasetBalanceMode balanceMode = DatasetBalanceMode.OFF;
+        DatasetBalanceMode effectiveBalanceMode = DatasetBalanceMode.OFF;
+        DatasetBalanceTargetPolicy balanceTargetPolicy =
+                DatasetBalanceTargetPolicy.MODE_RECOMMENDED;
+        String balanceEngine = "none";
+        String balanceTargetDescription = "none";
+        long balanceSeed = 1L;
+        int balanceTargetUsersPerClass;
+        int balanceOriginalUsers;
+        int balanceSelectedOriginalUsers;
+        int balanceDroppedUsers;
+        int balanceSyntheticUsers;
+        long balanceDroppedRows;
         final Map<String, Long> finalFolloweeCounts = new LinkedHashMap<String, Long>();
+        final Map<String, Long> originalFolloweeRowCounts = new LinkedHashMap<String, Long>();
+        final Map<String, Long> originalFolloweeUserCounts = new LinkedHashMap<String, Long>();
+        final Map<String, Long> finalFolloweeUserCounts = new LinkedHashMap<String, Long>();
         final List<String> warnings = new ArrayList<String>();
         final List<String[]> outputPreview = new ArrayList<String[]>();
 
         String summaryLine() {
+            String balance = balanceMode == null || balanceMode == DatasetBalanceMode.OFF
+                    ? "" : " Balance: " + balanceMode + ".";
+            if (balanceMode != null && effectiveBalanceMode != null
+                    && balanceMode != effectiveBalanceMode) {
+                balance = " Balance: " + balanceMode
+                        + " requested; effective mode " + effectiveBalanceMode + ".";
+            }
             return "Wrote " + writtenRows + " DSMP rows for " + uniqueUsers + " users and "
-                    + uniqueFollowees + " followee labels.";
+                    + uniqueFollowees + " followee labels." + balance;
         }
     }
 
@@ -514,6 +634,7 @@ final class UciRetailDatasetImporter {
 
     private static final class PassState {
         final Map<String, Map<String, Long>> labelsByUser = new LinkedHashMap<String, Map<String, Long>>();
+        final Map<String, Long> rowsByUser = new LinkedHashMap<String, Long>();
         final Set<String> users = new LinkedHashSet<String>();
         final Set<String> followees = new LinkedHashSet<String>();
     }
@@ -675,6 +796,31 @@ final class UciRetailDatasetImporter {
         return preview;
     }
 
+    static ImportReport diagnoseBalance(SourceProfile source, Options options, ProgressListener listener) throws IOException {
+        validatePreviewOptions(source, options);
+        if (listener != null) {
+            listener.onProgress("Diagnosing class balance from the current mapping.", 5);
+        }
+
+        ImportReport report = new ImportReport();
+        PassState state = new PassState();
+        readRowsForImport(source, options, report, state, null, true, listener);
+
+        Map<String, String> dominantLabelByUser = dominantLabels(state.labelsByUser);
+        buildBalancePlan(state, dominantLabelByUser, options, report);
+        report.uniqueUsers = report.balanceSelectedOriginalUsers
+                + report.balanceSyntheticUsers;
+        report.uniqueFollowees = report.finalFolloweeUserCounts.size();
+        if (report.acceptedRows == 0L) {
+            report.warnings.add("No usable rows passed the current mapping and validation settings.");
+        }
+
+        if (listener != null) {
+            listener.onProgress("Class balance diagnosis complete.", 100);
+        }
+        return report;
+    }
+
     static ImportReport importDataset(SourceProfile source, Options options, ProgressListener listener) throws IOException {
         validateOptions(source, options);
         if (listener != null) {
@@ -691,17 +837,20 @@ final class UciRetailDatasetImporter {
         readRowsForImport(source, options, report, state, null, true, listener);
 
         Map<String, String> dominantLabelByUser = dominantLabels(state.labelsByUser);
-        report.uniqueUsers = state.users.size();
-        report.uniqueFollowees = options.forceSingleFolloweePerUser
-                ? new LinkedHashSet<String>(dominantLabelByUser.values()).size()
-                : state.followees.size();
+        DatasetBalancePlan balancePlan =
+                buildBalancePlan(state, dominantLabelByUser, options, report);
+        report.uniqueUsers = report.balanceSelectedOriginalUsers
+                + report.balanceSyntheticUsers;
+        report.uniqueFollowees = report.finalFolloweeUserCounts.size();
 
         if (report.acceptedRows == 0L) {
             throw new IOException("No usable rows remained after validation. Check the column mapping and filters.");
         }
 
         if (listener != null) {
-            listener.onProgress("Pass 2 of 2: writing DSMP six-column dataset.", 58);
+            listener.onProgress("Pass 2 of 2: writing DSMP six-column dataset"
+                    + (report.effectiveBalanceMode.changesOutput()
+                    ? balancePlan.progressSuffix() : "") + ".", 58);
         }
 
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(report.outputFile), StandardCharsets.UTF_8));
@@ -710,6 +859,7 @@ final class UciRetailDatasetImporter {
                             writer,
                             dominantLabelByUser,
                             options.forceSingleFolloweePerUser,
+                            balancePlan,
                             report),
                     false, listener);
         } finally {
@@ -777,6 +927,9 @@ final class UciRetailDatasetImporter {
                     }
                     Long old = counts.get(rowLabel);
                     counts.put(rowLabel, old == null ? 1L : old.longValue() + 1L);
+                    Long oldRows = state.rowsByUser.get(mapped.userName);
+                    state.rowsByUser.put(mapped.userName,
+                            oldRows == null ? 1L : oldRows.longValue() + 1L);
                 } else if (rowWriter != null) {
                     rowWriter.write(mapped);
                 }
@@ -934,17 +1087,460 @@ final class UciRetailDatasetImporter {
         return result;
     }
 
+    private static DatasetBalancePlan buildBalancePlan(
+            PassState state,
+            Map<String, String> dominantLabelByUser,
+            Options options,
+            ImportReport report) throws IOException {
+        DatasetBalanceMode mode = options.balanceMode == null
+                ? DatasetBalanceMode.OFF : options.balanceMode;
+        DatasetBalanceTargetPolicy targetPolicy =
+                options.balanceTargetPolicy == null
+                        ? DatasetBalanceTargetPolicy.MODE_RECOMMENDED
+                        : options.balanceTargetPolicy;
+        DatasetBalanceMode effectiveMode = mode;
+        report.balanceMode = mode;
+        report.effectiveBalanceMode = effectiveMode;
+        report.balanceTargetPolicy = targetPolicy;
+        report.balanceSeed = options.balanceSeed;
+
+        List<BalanceUserRecord> records =
+                buildBalanceUserRecords(state, dominantLabelByUser);
+        report.balanceOriginalUsers = records.size();
+        for (BalanceUserRecord record : records) {
+            addLong(report.originalFolloweeUserCounts, record.followee, 1L);
+            addLong(report.originalFolloweeRowCounts, record.followee, record.rowCount);
+        }
+
+        DatasetBalancePlan plan = DatasetBalancePlan.allUsers(records);
+        if (records.isEmpty()) {
+            summarizeBalancePlan(records, plan, report);
+            return plan;
+        }
+
+        Map<String, List<BalanceUserRecord>> byLabel = groupBalanceRecords(records);
+        if (byLabel.size() <= 1 && effectiveMode.changesOutput()) {
+            report.warnings.add("Class balancing was requested, but only one followee class is available after preprocessing.");
+            effectiveMode = DatasetBalanceMode.DIAGNOSE_ONLY;
+            report.effectiveBalanceMode = effectiveMode;
+        }
+        for (Map.Entry<String, List<BalanceUserRecord>> entry : byLabel.entrySet()) {
+            if (entry.getValue().size() < 2) {
+                report.warnings.add("Followee class " + entry.getKey()
+                        + " has fewer than two users; classifier test splits may be weak.");
+            }
+        }
+        if (!effectiveMode.changesOutput()) {
+            if (mode.changesOutput()
+                    && effectiveMode == DatasetBalanceMode.DIAGNOSE_ONLY) {
+                report.balanceEngine = "not applied: only one followee class";
+                report.balanceTargetDescription = "requested " + mode
+                        + ", but only one followee class is available; output stays unchanged";
+            } else {
+                report.balanceEngine = effectiveMode == DatasetBalanceMode.DIAGNOSE_ONLY
+                        ? "diagnostic-only" : "none";
+                report.balanceTargetDescription = effectiveMode == DatasetBalanceMode.DIAGNOSE_ONLY
+                        ? "diagnosis only; output stays unchanged"
+                        : "off; output stays unchanged";
+            }
+            report.balanceTargetUsersPerClass = 0;
+            summarizeBalancePlan(records, plan, report);
+            return plan;
+        }
+
+        int target = resolveBalanceTarget(byLabel, effectiveMode, targetPolicy,
+                options.balanceTargetUsersPerClass, report);
+        report.balanceTargetUsersPerClass = target;
+        try {
+            if (effectiveMode == DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE
+                    || effectiveMode == DatasetBalanceMode.WEKA_SUPERVISED_RESAMPLE) {
+                plan = WekaSamplingBridge.sample(records, effectiveMode, target,
+                        options.balanceSeed);
+                report.balanceEngine = effectiveMode == DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE
+                        ? "weka.filters.supervised.instance.SpreadSubsample"
+                        : "weka.filters.supervised.instance.Resample";
+            } else {
+                plan = nativeBalancePlan(byLabel, effectiveMode, target,
+                        options.balanceSeed);
+                report.balanceEngine = "DSMP user-level balance engine";
+            }
+        } catch (Exception ex) {
+            throw new IOException("Could not build the dataset balance plan: "
+                    + ex.getMessage(), ex);
+        }
+        summarizeBalancePlan(records, plan, report);
+        return plan;
+    }
+
+    private static List<BalanceUserRecord> buildBalanceUserRecords(
+            PassState state,
+            Map<String, String> dominantLabelByUser) {
+        List<BalanceUserRecord> records = new ArrayList<BalanceUserRecord>();
+        for (String user : state.users) {
+            String followee = dominantLabelByUser.get(user);
+            if (followee == null || followee.length() == 0) {
+                followee = DEFAULT_COLLECTION_FOLLOWEE;
+            }
+            Long rowCount = state.rowsByUser.get(user);
+            records.add(new BalanceUserRecord(
+                    user,
+                    followee,
+                    rowCount == null ? 0L : rowCount.longValue()));
+        }
+        Collections.sort(records, new Comparator<BalanceUserRecord>() {
+            public int compare(BalanceUserRecord left, BalanceUserRecord right) {
+                int labelCompare = left.followee.compareTo(right.followee);
+                return labelCompare != 0
+                        ? labelCompare : left.userName.compareTo(right.userName);
+            }
+        });
+        return records;
+    }
+
+    private static Map<String, List<BalanceUserRecord>> groupBalanceRecords(
+            List<BalanceUserRecord> records) {
+        Map<String, List<BalanceUserRecord>> grouped =
+                new LinkedHashMap<String, List<BalanceUserRecord>>();
+        for (BalanceUserRecord record : records) {
+            List<BalanceUserRecord> labelRecords = grouped.get(record.followee);
+            if (labelRecords == null) {
+                labelRecords = new ArrayList<BalanceUserRecord>();
+                grouped.put(record.followee, labelRecords);
+            }
+            labelRecords.add(record);
+        }
+        return grouped;
+    }
+
+    private static int resolveBalanceTarget(
+            Map<String, List<BalanceUserRecord>> byLabel,
+            DatasetBalanceMode mode,
+            DatasetBalanceTargetPolicy requestedPolicy,
+            int requestedTarget,
+            ImportReport report) {
+        int minimum = Integer.MAX_VALUE;
+        long total = 0L;
+        List<Integer> counts = new ArrayList<Integer>();
+        for (List<BalanceUserRecord> records : byLabel.values()) {
+            int count = records.size();
+            counts.add(Integer.valueOf(count));
+            total += count;
+            minimum = Math.min(minimum, count);
+        }
+        if (counts.isEmpty()) {
+            report.balanceTargetDescription = "no accepted followee classes";
+            return 0;
+        }
+        Collections.sort(counts);
+        int median = counts.get(counts.size() / 2).intValue();
+        int lowerQuartile = percentileNearestRank(counts, 0.25d);
+        int upperQuartile = percentileNearestRank(counts, 0.75d);
+        DatasetBalanceTargetPolicy policy = requestedPolicy == null
+                ? DatasetBalanceTargetPolicy.MODE_RECOMMENDED : requestedPolicy;
+        if (requestedTarget > 0
+                && (policy == DatasetBalanceTargetPolicy.MANUAL
+                || policy == DatasetBalanceTargetPolicy.MODE_RECOMMENDED)) {
+            int target = requestedTarget;
+            report.balanceTargetPolicy = DatasetBalanceTargetPolicy.MANUAL;
+            String description = policy == DatasetBalanceTargetPolicy.MODE_RECOMMENDED
+                    ? "manual target from legacy Target users per class value"
+                    : "manual target from the Manual target users/class field";
+            if (requiresMinorityCap(mode) && target > minimum) {
+                report.warnings.add("The selected balance mode cannot create exact classes above the minority count. Requested target "
+                        + requestedTarget + " exceeds the smallest class "
+                        + minimum + "; using " + minimum + ".");
+                target = minimum;
+                description += "; capped to minority class count by the selected mode";
+            }
+            report.balanceTargetDescription = description;
+            return Math.max(1, target);
+        }
+        if (policy == DatasetBalanceTargetPolicy.MANUAL) {
+            DatasetBalanceTargetPolicy fallback = recommendedTargetPolicyForMode(mode);
+            report.warnings.add("Manual target policy was selected without a positive target; using "
+                    + fallback + " instead.");
+            policy = fallback;
+        } else if (policy == DatasetBalanceTargetPolicy.MODE_RECOMMENDED) {
+            policy = recommendedTargetPolicyForMode(mode);
+        }
+        report.balanceTargetPolicy = policy;
+
+        int target;
+        String description;
+        if (policy == DatasetBalanceTargetPolicy.STRICT_MINORITY) {
+            target = minimum;
+            description = "Auto: strict minority = smallest accepted followee class; exact downsampling with no synthetic users";
+        } else if (policy == DatasetBalanceTargetPolicy.CONSERVATIVE_CAP) {
+            target = Math.max(1, upperQuartile);
+            description = "Auto: conservative cap = 75th percentile user count; caps only oversized classes";
+        } else if (policy == DatasetBalanceTargetPolicy.BOUNDED_AUGMENTATION) {
+            int minorityBound = Math.max(1, minimum * MAX_AUTO_SYNTHETIC_MULTIPLIER);
+            target = Math.min(median, Math.max(lowerQuartile, minorityBound));
+            description = "Auto: bounded augmentation = minority-safe target bounded by the lower quartile, median, and "
+                    + MAX_AUTO_SYNTHETIC_MULTIPLIER + "x the smallest class";
+        } else {
+            int average = (int)Math.round(total / (double)Math.max(1, counts.size()));
+            target = Math.max(1, average);
+            description = "Auto: preserve total size = average users per class; recommended for Weka supervised Resample exports";
+        }
+
+        target = Math.max(1, target);
+        if (requiresMinorityCap(mode) && target > minimum) {
+            report.warnings.add("The selected balance mode cannot create exact classes above the minority count. Target policy "
+                    + policy + " proposed " + target
+                    + ", but the smallest class has " + minimum
+                    + " users; using " + minimum + ".");
+            target = minimum;
+            description += "; capped to minority class count by the selected mode";
+        }
+        report.balanceTargetDescription = description;
+        return target;
+    }
+
+    static DatasetBalanceTargetPolicy recommendedTargetPolicyForMode(
+            DatasetBalanceMode mode) {
+        if (mode == DatasetBalanceMode.STRICT_USER_BALANCE
+                || mode == DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE) {
+            return DatasetBalanceTargetPolicy.STRICT_MINORITY;
+        }
+        if (mode == DatasetBalanceMode.CONSERVATIVE_MAJORITY_CAP) {
+            return DatasetBalanceTargetPolicy.CONSERVATIVE_CAP;
+        }
+        if (mode == DatasetBalanceMode.HYBRID_CAP_AND_AUGMENT) {
+            return DatasetBalanceTargetPolicy.BOUNDED_AUGMENTATION;
+        }
+        return DatasetBalanceTargetPolicy.PRESERVE_TOTAL_SIZE;
+    }
+
+    private static boolean requiresMinorityCap(DatasetBalanceMode mode) {
+        return mode == DatasetBalanceMode.STRICT_USER_BALANCE
+                || mode == DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE;
+    }
+
+    private static int percentileNearestRank(List<Integer> sortedCounts, double percentile) {
+        if (sortedCounts == null || sortedCounts.isEmpty()) {
+            return 0;
+        }
+        double bounded = Math.max(0.0d, Math.min(1.0d, percentile));
+        int index = (int)Math.ceil(bounded * sortedCounts.size()) - 1;
+        index = Math.max(0, Math.min(sortedCounts.size() - 1, index));
+        return sortedCounts.get(index).intValue();
+    }
+
+    private static DatasetBalancePlan nativeBalancePlan(
+            Map<String, List<BalanceUserRecord>> byLabel,
+            DatasetBalanceMode mode,
+            int target,
+            long seed) {
+        DatasetBalancePlan plan = new DatasetBalancePlan();
+        for (Map.Entry<String, List<BalanceUserRecord>> entry : byLabel.entrySet()) {
+            ArrayList<BalanceUserRecord> shuffled =
+                    new ArrayList<BalanceUserRecord>(entry.getValue());
+            Collections.sort(shuffled, new Comparator<BalanceUserRecord>() {
+                public int compare(BalanceUserRecord left, BalanceUserRecord right) {
+                    return left.userName.compareTo(right.userName);
+                }
+            });
+            Collections.shuffle(shuffled,
+                    new Random(seed ^ entry.getKey().hashCode()));
+
+            int original = shuffled.size();
+            int keep = original;
+            if (mode == DatasetBalanceMode.CONSERVATIVE_MAJORITY_CAP
+                    || mode == DatasetBalanceMode.STRICT_USER_BALANCE
+                    || mode == DatasetBalanceMode.HYBRID_CAP_AND_AUGMENT) {
+                keep = Math.min(original, Math.max(1, target));
+            }
+            for (int index = 0; index < keep; index++) {
+                plan.addCopy(shuffled.get(index).userName);
+            }
+            if (mode == DatasetBalanceMode.HYBRID_CAP_AND_AUGMENT
+                    && original > 0 && keep < target) {
+                int index = 0;
+                while (keep + index < target) {
+                    BalanceUserRecord source = shuffled.get(index % original);
+                    plan.addCopy(source.userName);
+                    index++;
+                }
+            }
+        }
+        return plan;
+    }
+
+    private static void summarizeBalancePlan(
+            List<BalanceUserRecord> records,
+            DatasetBalancePlan plan,
+            ImportReport report) {
+        int selected = 0;
+        int synthetic = 0;
+        int dropped = 0;
+        Map<String, String> labelByUser = new LinkedHashMap<String, String>();
+        for (BalanceUserRecord record : records) {
+            labelByUser.put(record.userName, record.followee);
+            int copies = plan.copyCount(record.userName);
+            if (copies <= 0) {
+                dropped++;
+            } else {
+                selected++;
+                if (copies > 1) {
+                    synthetic += copies - 1;
+                }
+            }
+        }
+        report.balanceSelectedOriginalUsers = selected;
+        report.balanceDroppedUsers = dropped;
+        report.balanceSyntheticUsers = synthetic;
+        if (selected == 0) {
+            report.warnings.add("The balance plan selected no users; the import will fail before writing recommendations.");
+        }
+        for (Map.Entry<String, Integer> entry : plan.userCopyCounts.entrySet()) {
+            String label = labelByUser.get(entry.getKey());
+            if (label != null) {
+                addLong(report.finalFolloweeUserCounts, label,
+                        entry.getValue().longValue());
+            }
+        }
+    }
+
+    private static void addLong(Map<String, Long> counts, String key, long amount) {
+        Long old = counts.get(key);
+        counts.put(key, old == null ? amount : old.longValue() + amount);
+    }
+
+    private static final class BalanceUserRecord {
+        final String userName;
+        final String followee;
+        final long rowCount;
+
+        BalanceUserRecord(String userName, String followee, long rowCount) {
+            this.userName = userName;
+            this.followee = followee;
+            this.rowCount = rowCount;
+        }
+    }
+
+    private static final class DatasetBalancePlan {
+        final Map<String, Integer> userCopyCounts =
+                new LinkedHashMap<String, Integer>();
+
+        static DatasetBalancePlan allUsers(List<BalanceUserRecord> records) {
+            DatasetBalancePlan plan = new DatasetBalancePlan();
+            for (BalanceUserRecord record : records) {
+                plan.addCopy(record.userName);
+            }
+            return plan;
+        }
+
+        void addCopy(String userName) {
+            Integer old = userCopyCounts.get(userName);
+            userCopyCounts.put(userName,
+                    Integer.valueOf(old == null ? 1 : old.intValue() + 1));
+        }
+
+        int copyCount(String userName) {
+            Integer count = userCopyCounts.get(userName);
+            return count == null ? 0 : count.intValue();
+        }
+
+        int finalUserCount() {
+            int total = 0;
+            for (Integer count : userCopyCounts.values()) {
+                if (count != null && count.intValue() > 0) {
+                    total += count.intValue();
+                }
+            }
+            return total;
+        }
+
+        String progressSuffix() {
+            return userCopyCounts.isEmpty()
+                    ? "" : " with the balance plan applied";
+        }
+    }
+
+    private static final class WekaSamplingBridge {
+        private WekaSamplingBridge() {
+        }
+
+        static DatasetBalancePlan sample(
+                List<BalanceUserRecord> records,
+                DatasetBalanceMode mode,
+                int target,
+                long seed) throws Exception {
+            ArrayList<String> labels = new ArrayList<String>();
+            for (BalanceUserRecord record : records) {
+                if (!labels.contains(record.followee)) {
+                    labels.add(record.followee);
+                }
+            }
+            Collections.sort(labels);
+            ArrayList<Attribute> attributes = new ArrayList<Attribute>();
+            attributes.add(new Attribute("user_index"));
+            attributes.add(new Attribute("followee", labels));
+            Instances data = new Instances("dsmp_user_balance", attributes,
+                    records.size());
+            data.setClassIndex(1);
+            for (int index = 0; index < records.size(); index++) {
+                BalanceUserRecord record = records.get(index);
+                double[] values = new double[2];
+                values[0] = index;
+                values[1] = labels.indexOf(record.followee);
+                data.add(new DenseInstance(1.0, values));
+            }
+
+            Instances sampled;
+            if (mode == DatasetBalanceMode.WEKA_SPREAD_SUBSAMPLE) {
+                SpreadSubsample filter = new SpreadSubsample();
+                filter.setRandomSeed((int)Math.max(1L, seed));
+                filter.setDistributionSpread(1.0d);
+                if (target > 0) {
+                    filter.setMaxCount(target);
+                }
+                filter.setInputFormat(data);
+                sampled = Filter.useFilter(data, filter);
+            } else {
+                Resample filter = new Resample();
+                filter.setRandomSeed((int)Math.max(1L, seed));
+                filter.setBiasToUniformClass(1.0d);
+                if (target > 0 && !labels.isEmpty()) {
+                    double percent =
+                            (target * labels.size() * 100.0d)
+                                    / Math.max(1, records.size());
+                    filter.setSampleSizePercent(percent);
+                } else {
+                    filter.setSampleSizePercent(100.0d);
+                }
+                filter.setInputFormat(data);
+                sampled = Filter.useFilter(data, filter);
+            }
+
+            DatasetBalancePlan plan = new DatasetBalancePlan();
+            for (int index = 0; index < sampled.numInstances(); index++) {
+                Instance instance = sampled.instance(index);
+                int sourceIndex = (int)Math.round(instance.value(0));
+                if (sourceIndex >= 0 && sourceIndex < records.size()) {
+                    plan.addCopy(records.get(sourceIndex).userName);
+                }
+            }
+            return plan;
+        }
+    }
+
     private static final class RowWriter {
         private final BufferedWriter writer;
         private final Map<String, String> dominantLabelByUser;
         private final boolean forceSingleFolloweePerUser;
+        private final DatasetBalancePlan balancePlan;
         private final ImportReport report;
 
         RowWriter(BufferedWriter writer, Map<String, String> dominantLabelByUser,
-                boolean forceSingleFolloweePerUser, ImportReport report) {
+                boolean forceSingleFolloweePerUser,
+                DatasetBalancePlan balancePlan,
+                ImportReport report) {
             this.writer = writer;
             this.dominantLabelByUser = dominantLabelByUser;
             this.forceSingleFolloweePerUser = forceSingleFolloweePerUser;
+            this.balancePlan = balancePlan;
             this.report = report;
         }
 
@@ -952,8 +1548,20 @@ final class UciRetailDatasetImporter {
             String followee = forceSingleFolloweePerUser && dominantLabelByUser.containsKey(row.userName)
                     ? dominantLabelByUser.get(row.userName)
                     : row.followee;
-            Long oldCount = report.finalFolloweeCounts.get(followee);
-            report.finalFolloweeCounts.put(followee, oldCount == null ? 1L : oldCount.longValue() + 1L);
+            int copies = balancePlan == null ? 1 : balancePlan.copyCount(row.userName);
+            if (copies <= 0) {
+                report.balanceDroppedRows++;
+                return;
+            }
+            for (int copyIndex = 0; copyIndex < copies; copyIndex++) {
+                MappedRow emitted = copyIndex == 0
+                        ? row : syntheticCopy(row, followee, copyIndex);
+                writeOne(emitted, followee);
+            }
+        }
+
+        private void writeOne(MappedRow row, String followee) throws IOException {
+            addLong(report.finalFolloweeCounts, followee, 1L);
             String[] fields = outputFields(row, followee);
             for (int i = 0; i < fields.length; i++) {
                 if (i > 0) {
@@ -967,6 +1575,27 @@ final class UciRetailDatasetImporter {
                 report.outputPreview.add(fields);
             }
         }
+    }
+
+    private static MappedRow syntheticCopy(
+            MappedRow row,
+            String followee,
+            int copyIndex) {
+        long syntheticUserId = stablePositiveHash(
+                row.userName + "|" + followee + "|balance-user|" + copyIndex);
+        long syntheticPostId = stablePositiveHash(
+                row.postId + "|" + row.userName + "|balance-row|" + copyIndex);
+        String syntheticName = safeEntityName(
+                row.userName + " balance " + copyIndex,
+                "BalancedUser" + syntheticUserId);
+        return new MappedRow(
+                row.followee,
+                syntheticPostId,
+                row.date,
+                syntheticUserId,
+                syntheticName,
+                row.text,
+                true);
     }
 
     private static String[] outputFields(MappedRow row, String followee) {
@@ -1918,7 +2547,32 @@ final class UciRetailDatasetImporter {
             jsonField(writer, "written_rows", Long.toString(report.writtenRows), true, true);
             jsonField(writer, "unique_users", Integer.toString(report.uniqueUsers), true, true);
             jsonField(writer, "unique_followees", Integer.toString(report.uniqueFollowees), true, true);
+            jsonField(writer, "balance_mode", report.balanceMode.toString(), true);
+            jsonField(writer, "balance_effective_mode",
+                    report.effectiveBalanceMode.toString(), true);
+            jsonField(writer, "balance_engine", report.balanceEngine, true);
+            jsonField(writer, "balance_target_policy",
+                    report.balanceTargetPolicy.toString(), true);
+            jsonField(writer, "balance_seed", Long.toString(report.balanceSeed), true, true);
+            jsonField(writer, "balance_target_users_per_class",
+                    Integer.toString(report.balanceTargetUsersPerClass), true, true);
+            jsonField(writer, "balance_target_description",
+                    report.balanceTargetDescription, true);
+            jsonField(writer, "balance_original_users",
+                    Integer.toString(report.balanceOriginalUsers), true, true);
+            jsonField(writer, "balance_selected_original_users",
+                    Integer.toString(report.balanceSelectedOriginalUsers), true, true);
+            jsonField(writer, "balance_dropped_users",
+                    Integer.toString(report.balanceDroppedUsers), true, true);
+            jsonField(writer, "balance_synthetic_users",
+                    Integer.toString(report.balanceSyntheticUsers), true, true);
+            jsonField(writer, "balance_dropped_rows",
+                    Long.toString(report.balanceDroppedRows), true, true);
             jsonLongMap(writer, "followee_label_counts", report.finalFolloweeCounts, true);
+            jsonLongMap(writer, "original_followee_user_counts", report.originalFolloweeUserCounts, true);
+            jsonLongMap(writer, "original_followee_row_counts", report.originalFolloweeRowCounts, true);
+            jsonLongMap(writer, "final_followee_user_counts", report.finalFolloweeUserCounts, true);
+            jsonStringList(writer, "warnings", report.warnings, true);
             writer.write("  \"columns\": {\n");
             jsonField(writer, "invoice", source.displayColumn(options.invoiceColumn), true);
             jsonField(writer, "stock_code", source.displayColumn(options.stockCodeColumn), true);
@@ -1970,6 +2624,21 @@ final class UciRetailDatasetImporter {
         writer.write(comma ? ",\n" : "\n");
     }
 
+    private static void jsonStringList(BufferedWriter writer, String key,
+            List<String> values, boolean comma) throws IOException {
+        writer.write("  \"" + escapeJson(key) + "\": [");
+        if (!values.isEmpty()) {
+            writer.write("\n");
+            for (int i = 0; i < values.size(); i++) {
+                writer.write("    \"" + escapeJson(values.get(i)) + "\"");
+                writer.write(i + 1 < values.size() ? ",\n" : "\n");
+            }
+            writer.write("  ");
+        }
+        writer.write("]");
+        writer.write(comma ? ",\n" : "\n");
+    }
+
     private static String escapeJson(String value) {
         String raw = value == null ? "" : value;
         return raw.replace("\\", "\\\\").replace("\"", "\\\"");
@@ -1978,8 +2647,8 @@ final class UciRetailDatasetImporter {
     private static void writeAudit(SourceProfile source, Options options, ImportReport report) throws IOException {
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(report.auditFile), StandardCharsets.UTF_8));
         try {
-            writer.write("DSMP Dataset Import Audit\n");
-            writer.write("=========================\n\n");
+            writer.write("DSMP Dataset Preprocessing Audit\n");
+            writer.write("================================\n\n");
             writer.write("Source: " + source.inputFile.getAbsolutePath() + "\n");
             writer.write("Selected dataset type: " + source.selectedKind + "\n");
             writer.write("Detected dataset type: " + source.detectedKind + "\n");
@@ -2000,26 +2669,63 @@ final class UciRetailDatasetImporter {
             writer.write("Fallback dates used: " + report.badDateRows + "\n");
             writer.write("Unique users: " + report.uniqueUsers + "\n");
             writer.write("Unique followees: " + report.uniqueFollowees + "\n\n");
+            writer.write("Class balance preprocessing:\n");
+            writer.write("- Mode: " + report.balanceMode + "\n");
+            writer.write("- Effective mode: " + report.effectiveBalanceMode + "\n");
+            writer.write("- Engine: " + report.balanceEngine + "\n");
+            writer.write("- Target policy: " + report.balanceTargetPolicy + "\n");
+            writer.write("- Seed: " + report.balanceSeed + "\n");
+            writer.write("- Target users per class: "
+                    + report.balanceTargetUsersPerClass + "\n");
+            writer.write("- Target source: " + report.balanceTargetDescription + "\n");
+            writer.write("- Original users: " + report.balanceOriginalUsers + "\n");
+            writer.write("- Selected original users: "
+                    + report.balanceSelectedOriginalUsers + "\n");
+            writer.write("- Dropped users: " + report.balanceDroppedUsers + "\n");
+            writer.write("- Synthetic users: " + report.balanceSyntheticUsers + "\n");
+            writer.write("- Dropped rows: " + report.balanceDroppedRows + "\n\n");
+            writer.write("Original followee user counts:\n");
+            writeCountLines(writer, report.originalFolloweeUserCounts);
+            writer.write("\nOriginal followee row counts:\n");
+            writeCountLines(writer, report.originalFolloweeRowCounts);
+            writer.write("\nFinal followee user counts:\n");
+            writeCountLines(writer, report.finalFolloweeUserCounts);
+            writer.write("\n");
             writer.write("Followee label counts:\n");
-            List<Map.Entry<String, Long>> entries =
-                    new ArrayList<Map.Entry<String, Long>>(report.finalFolloweeCounts.entrySet());
-            Collections.sort(entries, new Comparator<Map.Entry<String, Long>>() {
-                public int compare(Map.Entry<String, Long> left, Map.Entry<String, Long> right) {
-                    int countCompare = Long.compare(right.getValue().longValue(), left.getValue().longValue());
-                    if (countCompare != 0) {
-                        return countCompare;
-                    }
-                    return left.getKey().compareTo(right.getKey());
+            writeCountLines(writer, report.finalFolloweeCounts);
+            if (!report.warnings.isEmpty()) {
+                writer.write("\nWarnings:\n");
+                for (String warning : report.warnings) {
+                    writer.write("- " + warning + "\n");
                 }
-            });
-            for (Map.Entry<String, Long> entry : entries) {
-                writer.write("- " + entry.getKey() + ": " + entry.getValue() + "\n");
             }
             writer.write("\n");
             writer.write("DSMP output format:\n");
             writer.write("followee/referenceUser<TAB>numericPostId<TAB>yyyy-MM-dd<TAB>numericUserId<TAB>userName<TAB>text\n");
         } finally {
             writer.close();
+        }
+    }
+
+    private static void writeCountLines(BufferedWriter writer,
+            Map<String, Long> values) throws IOException {
+        List<Map.Entry<String, Long>> entries =
+                new ArrayList<Map.Entry<String, Long>>(values.entrySet());
+        Collections.sort(entries, new Comparator<Map.Entry<String, Long>>() {
+            public int compare(Map.Entry<String, Long> left, Map.Entry<String, Long> right) {
+                int countCompare = Long.compare(right.getValue().longValue(), left.getValue().longValue());
+                if (countCompare != 0) {
+                    return countCompare;
+                }
+                return left.getKey().compareTo(right.getKey());
+            }
+        });
+        if (entries.isEmpty()) {
+            writer.write("- none\n");
+            return;
+        }
+        for (Map.Entry<String, Long> entry : entries) {
+            writer.write("- " + entry.getKey() + ": " + entry.getValue() + "\n");
         }
     }
 
