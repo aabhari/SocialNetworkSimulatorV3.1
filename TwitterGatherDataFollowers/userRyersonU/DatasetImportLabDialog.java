@@ -87,6 +87,8 @@ final class DatasetImportLabDialog extends JDialog {
 	private JTextField outputDirField;
 	private JTextField outputNameField;
 	private JComboBox<UciRetailDatasetImporter.MappingProfile> profileCombo;
+	private boolean profileUserSelected;
+	private boolean suppressProfileEvents;
 	private JComboBox<String> invoiceCombo;
 	private JComboBox<String> stockCombo;
 	private JComboBox<String> descriptionCombo;
@@ -305,6 +307,9 @@ final class DatasetImportLabDialog extends JDialog {
 		profileCombo.setFont(LABEL_FONT);
 		profileCombo.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent event) {
+				if (!suppressProfileEvents) {
+					profileUserSelected = true;
+				}
 				updateProfileGuide();
 			}
 		});
@@ -472,7 +477,7 @@ final class DatasetImportLabDialog extends JDialog {
 		resetButton = oldButton("Reset Defaults");
 		resetButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent event) {
-				applyDefaultsFromSource();
+				applyDefaultsFromSource(false);
 			}
 		});
 		panel.add(buildButton);
@@ -672,6 +677,7 @@ final class DatasetImportLabDialog extends JDialog {
 			return;
 		}
 		selectedDatasetKind = kind;
+		profileUserSelected = false;
 		sourceProfile = null;
 		lastReport = null;
 		lastBalanceDiagnosis = null;
@@ -719,13 +725,18 @@ final class DatasetImportLabDialog extends JDialog {
 				containsCurrent = true;
 			}
 		}
-		profileCombo.setModel(model);
-		if (containsCurrent) {
-			profileCombo.setSelectedItem(current);
-		} else if (profiles.length > 0) {
-			profileCombo.setSelectedItem(profiles[0]);
+		suppressProfileEvents = true;
+		try {
+			profileCombo.setModel(model);
+			if (containsCurrent) {
+				profileCombo.setSelectedItem(current);
+			} else if (profiles.length > 0) {
+				profileCombo.setSelectedItem(profiles[0]);
+			}
+			profileCombo.setEnabled(kind != UciRetailDatasetImporter.DatasetKind.OTHER);
+		} finally {
+			suppressProfileEvents = false;
 		}
-		profileCombo.setEnabled(kind != UciRetailDatasetImporter.DatasetKind.OTHER);
 	}
 
 	private static UciRetailDatasetImporter.MappingProfile[] profilesForKind(
@@ -886,7 +897,7 @@ final class DatasetImportLabDialog extends JDialog {
 				try {
 					sourceProfile = get();
 					selectedDatasetKind = sourceProfile.selectedKind;
-					applyDefaultsFromSource();
+					applyDefaultsFromSource(true);
 					renderSourceProfile();
 					setStatus("READY", "Dataset inspection complete. Review mapping, then build DSMP output.", 100);
 					updateConsoleStats("INSPECTED",
@@ -999,13 +1010,21 @@ final class DatasetImportLabDialog extends JDialog {
 				+ "\nSource file: " + lastReport.outputFile.getAbsolutePath());
 	}
 
-	private void applyDefaultsFromSource() {
+	private void applyDefaultsFromSource(boolean preserveProfileSelection) {
 		if (sourceProfile == null) {
 			return;
 		}
+		UciRetailDatasetImporter.MappingProfile previousProfile = currentProfileSelection();
 		UciRetailDatasetImporter.Options defaults = UciRetailDatasetImporter.Options.defaultsFor(sourceProfile);
+		boolean preserveExplicitProfile = preserveProfileSelection && profileUserSelected;
+		UciRetailDatasetImporter.MappingProfile profileSelection =
+				profileForInspectedDefaults(
+						defaults.datasetKind,
+						defaults.profile,
+						previousProfile,
+						preserveExplicitProfile);
 		selectedDatasetKind = defaults.datasetKind;
-		updateProfileChoicesForKind(selectedDatasetKind, defaults.profile);
+		updateProfileChoicesForKind(selectedDatasetKind, profileSelection);
 		outputDirField.setText(defaults.outputDirectory.getAbsolutePath());
 		outputNameField.setText(defaults.outputBaseName);
 		skipCancelledCheck.setSelected(defaults.skipCancelledInvoices);
@@ -1027,8 +1046,55 @@ final class DatasetImportLabDialog extends JDialog {
 		balanceSeedField.setText(Long.toString(defaults.balanceSeed));
 		populateColumnCombos(sourceProfile, defaults);
 		updateDatasetKindUi();
-		updateProfileChoicesForKind(selectedDatasetKind, defaults.profile);
+		updateProfileChoicesForKind(selectedDatasetKind, profileSelection);
+		profileUserSelected = preserveExplicitProfile
+				&& previousProfile != null
+				&& profileSelection == previousProfile;
+		if (profileUserSelected
+				&& previousProfile != null
+				&& profileSelection != defaults.profile) {
+			log("Preserved mapping profile after inspection: " + profileSelection + ".");
+		}
 		updateProfileGuide();
+	}
+
+	private UciRetailDatasetImporter.MappingProfile currentProfileSelection() {
+		if (profileCombo == null) {
+			return null;
+		}
+		Object selected = profileCombo.getSelectedItem();
+		return selected instanceof UciRetailDatasetImporter.MappingProfile
+				? (UciRetailDatasetImporter.MappingProfile) selected : null;
+	}
+
+	static UciRetailDatasetImporter.MappingProfile profileForInspectedDefaults(
+			UciRetailDatasetImporter.DatasetKind kind,
+			UciRetailDatasetImporter.MappingProfile defaultProfile,
+			UciRetailDatasetImporter.MappingProfile currentProfile,
+			boolean preserveProfileSelection) {
+		if (preserveProfileSelection && profileAllowedForKind(kind, currentProfile)) {
+			return currentProfile;
+		}
+		if (profileAllowedForKind(kind, defaultProfile)) {
+			return defaultProfile;
+		}
+		UciRetailDatasetImporter.MappingProfile[] profiles = profilesForKind(kind);
+		return profiles.length == 0 ? null : profiles[0];
+	}
+
+	private static boolean profileAllowedForKind(
+			UciRetailDatasetImporter.DatasetKind kind,
+			UciRetailDatasetImporter.MappingProfile profile) {
+		if (profile == null) {
+			return false;
+		}
+		UciRetailDatasetImporter.MappingProfile[] profiles = profilesForKind(kind);
+		for (int i = 0; i < profiles.length; i++) {
+			if (profiles[i] == profile) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void populateColumnCombos(UciRetailDatasetImporter.SourceProfile source,

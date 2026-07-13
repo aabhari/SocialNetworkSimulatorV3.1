@@ -32,6 +32,24 @@ public final class UciRetailDatasetImporterSelfTest {
 		require(profile.columnNames.size() == 8, "Unexpected column count");
 		require(profile.previewRows.size() == 6, "Preview did not include all sample rows");
 		require(profile.previewRows.get(0).get(2).contains(","), "Quoted comma was not preserved in description");
+		require(DatasetImportLabDialog.profileForInspectedDefaults(
+				UciRetailDatasetImporter.DatasetKind.RETAIL,
+				UciRetailDatasetImporter.MappingProfile.SIMILAR_CUSTOMERS,
+				UciRetailDatasetImporter.MappingProfile.SMART_PRODUCT_CATEGORY,
+				true) == UciRetailDatasetImporter.MappingProfile.SMART_PRODUCT_CATEGORY,
+				"Inspection should preserve an explicit retail smart-category profile");
+		require(DatasetImportLabDialog.profileForInspectedDefaults(
+				UciRetailDatasetImporter.DatasetKind.RETAIL,
+				UciRetailDatasetImporter.MappingProfile.SIMILAR_CUSTOMERS,
+				UciRetailDatasetImporter.MappingProfile.SMART_PRODUCT_CATEGORY,
+				false) == UciRetailDatasetImporter.MappingProfile.SIMILAR_CUSTOMERS,
+				"Reset defaults should restore the retail default profile");
+		require(DatasetImportLabDialog.profileForInspectedDefaults(
+				UciRetailDatasetImporter.DatasetKind.JOURNAL,
+				UciRetailDatasetImporter.MappingProfile.JOURNAL_AUTHORS,
+				UciRetailDatasetImporter.MappingProfile.SMART_PRODUCT_CATEGORY,
+				true) == UciRetailDatasetImporter.MappingProfile.JOURNAL_AUTHORS,
+				"Inspection should not preserve a profile invalid for the selected dataset family");
 
 		UciRetailDatasetImporter.Options options =
 				UciRetailDatasetImporter.Options.defaultsFor(profile);
