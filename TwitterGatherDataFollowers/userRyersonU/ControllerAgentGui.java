@@ -76,6 +76,7 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 
 	public JComboBox<String> algorithmSelectionBox;
 	private JButton mlpSettingsButton;
+	private JButton mlpAutoSearchButton;
 	private AlgorithmParameterSettings algorithmParameterSettings = AlgorithmParameterSettings.defaults();
 	private JComboBox<String> mapperSelectionBox;
 	private JComboBox<String> reducerSelectionBox;
@@ -448,6 +449,14 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 				showMlpSettingsDialog();
 			}
 		});
+		mlpAutoSearchButton = new JButton("MLP Auto Search");
+		mlpAutoSearchButton.setEnabled(false);
+		mlpAutoSearchButton.setToolTipText("Available when MLP is selected.");
+		mlpAutoSearchButton.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent event) {
+				showMlpAutoSearchDialog();
+			}
+		});
 		refreshMlpSettingsButton();
 		
 		String[] simulationSelection = {"0", "1", "2", "3", "4", "5"};       // added by Sepide 
@@ -485,6 +494,27 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 	}
 
+	private void showMlpAutoSearchDialog()
+	{
+		File selectedDataset = fileChooser == null ? null : fileChooser.getSelectedFile();
+		MlpHyperparameterSearchDialog.showDialog(this, selectedDataset,
+				algorithmParameterSettings);
+	}
+
+	void applyMlpAutoSearchSettings(AlgorithmParameterSettings settings, String summary)
+	{
+		if (settings == null)
+		{
+			return;
+		}
+		algorithmParameterSettings = settings.copy();
+		algorithmSelectionBox.setSelectedIndex(MLP);
+		algorithmRec = MLP;
+		refreshMlpSettingsButton();
+		appendResult("MLP Auto Search selected: " + summary);
+		appendResult("Applied MLP settings: " + algorithmParameterSettings.summaryForMlp());
+	}
+
 	private void refreshMlpSettingsButton()
 	{
 		if (mlpSettingsButton == null)
@@ -493,15 +523,27 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		}
 		boolean isMlp = algorithmSelectionBox != null && algorithmSelectionBox.getSelectedIndex() == MLP;
 		mlpSettingsButton.setEnabled(isMlp);
+		if (mlpAutoSearchButton != null)
+		{
+			mlpAutoSearchButton.setEnabled(isMlp);
+		}
 		if (isMlp)
 		{
 			mlpSettingsButton.setText("MLP Settings (" + algorithmParameterSettings.profileLabel() + ")");
 			mlpSettingsButton.setToolTipText(algorithmParameterSettings.summaryForMlp());
+			if (mlpAutoSearchButton != null)
+			{
+				mlpAutoSearchButton.setToolTipText("Automatically search MLP-only hyperparameters for the loaded DSMP dataset.");
+			}
 		}
 		else
 		{
 			mlpSettingsButton.setText("MLP Settings");
 			mlpSettingsButton.setToolTipText("Available when MLP is selected.");
+			if (mlpAutoSearchButton != null)
+			{
+				mlpAutoSearchButton.setToolTipText("Available when MLP is selected.");
+			}
 		}
 	}
 
@@ -1142,10 +1184,19 @@ public class ControllerAgentGui extends JFrame implements ActionListener {
 		initializationsPanel.add(endDateField);
 		initializationsPanel.add(recommendationLabel);
 		initializationsPanel.add(recommendationField);
+		JPanel mlpControlsPanel = new JPanel(new GridLayout(2, 1, 0, 3));
+		mlpControlsPanel.setOpaque(false);
+		mlpControlsPanel.add(mlpSettingsButton);
+		mlpControlsPanel.add(mlpAutoSearchButton);
+		JLabel mlpControlsLabel = new JLabel("MLP Settings: ");
+		mlpControlsLabel.setHorizontalAlignment(JLabel.RIGHT);
+		mlpControlsLabel.setForeground(Color.WHITE);
+		mlpControlsLabel.setFont(new Font("Arial", Font.BOLD, 12));
+
 		initializationsPanel.add(algorithmLabel);
 		initializationsPanel.add(algorithmSelectionBox);
-		initializationsPanel.add(new JLabel("MLP Settings: "));
-		initializationsPanel.add(mlpSettingsButton);
+		initializationsPanel.add(mlpControlsLabel);
+		initializationsPanel.add(mlpControlsPanel);
 		initializationsPanel.add(simulationNumber);      // added by Sepide
 		initializationsPanel.add(simulationSelectionBox);        // added by Sepide
 		initializationsPanel.setBorder(initializationTitle);

@@ -5249,8 +5249,12 @@ public class RecommenderAgent extends Agent
 					
 					BackPropagation nodeLearningRule = (BackPropagation) nodeMLP.getLearningRule();
 					nodeLearningRule.setLearningRate(mlpSettings.getMlpLearningRate());
-					nodeLearningRule.setMaxError(mlpSettings.getMlpMaxError());  
-					
+					nodeLearningRule.setMaxError(mlpSettings.getMlpMaxError());
+					if (mlpSettings.getMlpMaxIterations() > 0)
+					{
+						nodeLearningRule.setMaxIterations(mlpSettings.getMlpMaxIterations());
+					}
+
 					System.out.println(getLocalName()+" training MLP");
 					
 					startTimeTrain = System.nanoTime();
@@ -6120,6 +6124,9 @@ public class RecommenderAgent extends Agent
 			String detail = "Legacy Neuroph MLP shape: features="+featureCount
 					+", hiddenLayers="+settings.getMlpHiddenLayers()
 					+", hiddenNeurons="+settings.getMlpHiddenNeurons()
+					+", learningRate="+settings.getMlpLearningRate()
+					+", maxError="+settings.getMlpMaxError()
+					+", maxIterations="+(settings.getMlpMaxIterations() <= 0 ? "unlimited" : String.valueOf(settings.getMlpMaxIterations()))
 					+", outputs="+outputCount
 					+", train="+trainRows
 					+", test="+testRows
